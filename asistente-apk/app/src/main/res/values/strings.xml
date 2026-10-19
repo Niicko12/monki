@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_desc">Permite que el Asistente vea la pantalla y abra apps por ti cuando se lo pidas (los toques van en "Monki (toques)"). Ábrelo con la burbuja flotante.</string>
+    <string name="gesture_desc">Permite que Monki toque la pantalla solo mientras lo necesita. Se activa y desactiva solo.</string>
+</resources>

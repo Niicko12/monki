@@ -1,0 +1,16 @@
+[project]
+name = "agente-consola"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai>=2.31.0",
+    "pillow>=13.0.0",
+]
+
+[project.scripts]
+agente-consola = "agente_consola:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
