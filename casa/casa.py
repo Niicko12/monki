@@ -261,6 +261,186 @@ def pc_musica(accion: str) -> str:
     return f"{accion} enviado."
 
 
+@mcp.tool(name="pc_info")
+def pc_info(corto: bool = False) -> str:
+    """CPU, memoria, disco, batería, IP y tiempo encendida de esta computadora. corto=true: una línea para widgets."""
+    import psutil
+    cpu = psutil.cpu_percent(interval=0.5)
+    ram = psutil.virtual_memory().percent
+    b = psutil.sensors_battery()
+    bat = f"{int(b.percent)}%{'⚡' if b.power_plugged else ''}" if b else "enchufada"
+    if corto:
+        return f"🔋{bat} · CPU {cpu:.0f}% · RAM {ram:.0f}%"
+    disco = psutil.disk_usage("C:\\" if ES_WIN else "/")
+    horas = (time.time() - psutil.boot_time()) / 3600
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as so:
+            so.connect(("8.8.8.8", 80)); ip = so.getsockname()[0]
+    except OSError:
+        ip = "?"
+    return (f"CPU {cpu:.0f}%, RAM {ram:.0f}%, disco libre {disco.free / 1e9:.0f} GB de {disco.total / 1e9:.0f} GB, "
+            f"batería {bat}, IP {ip}, encendida hace {horas:.1f} h.")
+
+
+@mcp.tool(name="pc_energia")
+def pc_energia(accion: str, confirmar: bool = False) -> str:
+    """bloquear, dormir, apagar_pantalla, reiniciar o apagar esta computadora. reiniciar/apagar piden confirmar=true (pregunta antes al usuario)."""
+    a = accion.lower().strip()
+    if a in ("reiniciar", "apagar") and not confirmar:
+        return "Pregúntale al usuario si está seguro y vuelve a llamar con confirmar=true."
+    if ES_MAC:
+        cmd = {
+            "bloquear": lambda: sh("pmset", "displaysleepnow"),
+            "apagar_pantalla": lambda: sh("pmset", "displaysleepnow"),
+            "dormir": lambda: osa('tell application "System Events" to sleep'),
+            "reiniciar": lambda: osa('tell application "System Events" to restart'),
+            "apagar": lambda: osa('tell application "System Events" to shut down'),
+        }.get(a)
+    else:
+        cmd = {
+            "bloquear": lambda: sh("rundll32.exe", "user32.dll,LockWorkStation"),
+            "apagar_pantalla": lambda: ps("(Add-Type '[DllImport(\"user32.dll\")]public static extern int SendMessage(int h,int m,int w,int l);' -Name a -Pas)::SendMessage(-1,0x0112,0xF170,2)"),
+            "dormir": lambda: sh("rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"),
+            "reiniciar": lambda: sh("shutdown", "/r", "/t", "5"),
+            "apagar": lambda: sh("shutdown", "/s", "/t", "5"),
+        }.get(a)
+    if not cmd:
+        return "Acción no válida: bloquear, dormir, apagar_pantalla, reiniciar o apagar."
+    cmd()
+    return f"Listo: {a}."
+
+
+@mcp.tool(name="pc_silencio")
+def pc_silencio(activar: bool = True) -> str:
+    """Silencia (activar=true) o quita el silencio de esta computadora."""
+    if ES_MAC:
+        osa(f"set volume output muted {'true' if activar else 'false'}")
+    else:
+        _vol_win().SetMute(1 if activar else 0, None)
+    return "Silenciada." if activar else "Con sonido."
+
+
+@mcp.tool(name="pc_brillo")
+def pc_brillo(nivel: int) -> str:
+    """Brillo de la pantalla de esta computadora (0 a 100). En PC de escritorio con monitor externo puede no funcionar."""
+    nivel = max(0, min(100, nivel))
+    if ES_MAC:
+        # macOS no trae comando de brillo: baja todo con la tecla de brillo y sube los pasos necesarios (16 pasos)
+        osa("tell application \"System Events\"\nrepeat 16 times\nkey code 145\nend repeat\n"
+            f"repeat {round(nivel / 6.25)} times\nkey code 144\nend repeat\nend tell")
+    else:
+        ps(f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{nivel})")
+    return f"Brillo al {nivel}%."
+
+
+def _gui():
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    return pyautogui
+
+
+@mcp.tool(name="pc_teclado")
+def pc_teclado(texto: str = "", atajo: str = "") -> str:
+    """Escribe texto y/o presiona un atajo en esta computadora. atajo: teclas con + (ej. "enter", "ctrl+c", "command+space", "alt+tab", "esc")."""
+    g = _gui()
+    if texto:
+        if ES_MAC or not texto.isascii():
+            # Acentos y ñ: pegar desde el portapapeles es más fiable que teclearlos
+            _copiar(texto); g.hotkey("command" if ES_MAC else "ctrl", "v")
+        else:
+            g.write(texto, interval=0.01)
+    if atajo:
+        teclas = [t.strip().lower().replace("cmd", "command").replace("control", "ctrl").replace("intro", "enter")
+                  for t in atajo.split("+") if t.strip()]
+        g.hotkey(*teclas)
+    return "Listo." if texto or atajo else "No me diste texto ni atajo."
+
+
+@mcp.tool(name="pc_raton")
+def pc_raton(accion: str, x: int = -1, y: int = -1, cantidad: int = 5) -> str:
+    """Mouse de esta computadora: clic, doble_clic, clic_derecho, mover (en x,y de pc_captura) o scroll (cantidad + arriba, - abajo)."""
+    g = _gui()
+    w, h = g.size()
+    if x >= 0 and y >= 0:
+        # Las coordenadas vienen de pc_captura (reducida a 1024 de ancho)
+        ancho_cap = 1024
+        alto_cap = round(h * ancho_cap / w)
+        x, y = round(x * w / ancho_cap), round(y * h / alto_cap)
+    pos = (x, y) if x >= 0 and y >= 0 else (None, None)
+    a = accion.lower()
+    if a == "clic": g.click(*pos)
+    elif a == "doble_clic": g.doubleClick(*pos)
+    elif a == "clic_derecho": g.rightClick(*pos)
+    elif a == "mover": g.moveTo(*pos, duration=0.2)
+    elif a == "scroll": g.scroll(cantidad * (1 if ES_WIN else 1), *pos)
+    else:
+        return "Acción no válida: clic, doble_clic, clic_derecho, mover o scroll."
+    return "Listo."
+
+
+def _copiar(texto: str):
+    if ES_MAC:
+        subprocess.run(["pbcopy"], input=texto, text=True)
+    else:
+        subprocess.run(["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input"], input=texto, text=True)
+
+
+@mcp.tool(name="pc_portapapeles")
+def pc_portapapeles(texto: str = "") -> str:
+    """Sin texto: lee el portapapeles de esta computadora. Con texto: lo copia ahí."""
+    if texto:
+        _copiar(texto)
+        return "Copiado."
+    actual = sh("pbpaste") if ES_MAC else ps("Get-Clipboard -Raw")
+    return actual[:2000] or "El portapapeles está vacío."
+
+
+@mcp.tool(name="pc_ventana")
+def pc_ventana(accion: str, app: str) -> str:
+    """cerrar, enfocar o minimizar una app de esta computadora por su nombre (Safari, Chrome, Spotify, notepad…)."""
+    a = accion.lower()
+    if ES_MAC:
+        if a == "cerrar": osa(f'tell application "{app}" to quit')
+        elif a == "enfocar": osa(f'tell application "{app}" to activate')
+        elif a == "minimizar": osa(f'tell application "System Events" to set visible of process "{app}" to false')
+        else: return "Acción no válida: cerrar, enfocar o minimizar."
+        return f"Listo: {a} {app}."
+    n = app.replace("'", "")
+    if a == "cerrar":
+        ps(f"Get-Process | Where-Object {{ $_.ProcessName -like '*{n}*' -or $_.MainWindowTitle -like '*{n}*' }} | "
+           "Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { $_.CloseMainWindow() | Out-Null }")
+    elif a in ("enfocar", "minimizar"):
+        modo = 9 if a == "enfocar" else 6
+        ps("Add-Type '[DllImport(\"user32.dll\")]public static extern bool ShowWindow(System.IntPtr h,int c);"
+           "[DllImport(\"user32.dll\")]public static extern bool SetForegroundWindow(System.IntPtr h);' -Name w -Namespace u; "
+           f"Get-Process | Where-Object {{ ($_.ProcessName -like '*{n}*' -or $_.MainWindowTitle -like '*{n}*') -and $_.MainWindowHandle -ne 0 }} | "
+           f"Select-Object -First 1 | ForEach-Object {{ [u.w]::ShowWindow($_.MainWindowHandle,{modo}); "
+           + ("[u.w]::SetForegroundWindow($_.MainWindowHandle) }" if a == "enfocar" else "}"))
+    else:
+        return "Acción no válida: cerrar, enfocar o minimizar."
+    return f"Listo: {a} {app}."
+
+
+@mcp.tool(name="pc_archivos")
+def pc_archivos(accion: str, nombre: str) -> str:
+    """buscar: archivos de la carpeta del usuario cuyo nombre contenga [nombre] (hasta 10). abrir: abre la ruta [nombre] con su app."""
+    if accion.lower() == "abrir":
+        ruta = Path(nombre).expanduser()
+        if not ruta.exists():
+            return "No existe esa ruta."
+        if ES_MAC: sh("open", str(ruta))
+        else: os.startfile(str(ruta))
+        return f"Abrí {ruta.name}."
+    if ES_MAC:
+        res = sh("mdfind", "-onlyin", str(Path.home()), "-name", nombre).splitlines()
+    else:
+        res = ps(f"Get-ChildItem -Path $HOME -Recurse -Depth 4 -ErrorAction SilentlyContinue -Filter '*{nombre.replace(chr(39), '')}*' | "
+                 "Select-Object -First 10 -ExpandProperty FullName").splitlines()
+    res = [r for r in res if "/Library/" not in r and "\\AppData\\" not in r][:10]
+    return "\n".join(res) or "No encontré archivos con ese nombre."
+
+
 # ---------------- teles / Chromecast ----------------
 
 _casts: dict[str, pychromecast.Chromecast] = {}
@@ -440,13 +620,45 @@ def alexa_decir(texto: str, dispositivo: str = "") -> str:
     return "Lo dijo el Echo." if '"dispositivo"' in r else r
 
 
+@mcp.tool(name="alexa_reproduciendo")
+def alexa_reproduciendo(dispositivo: str = "") -> str:
+    """Qué está sonando en los Echos (canción, artista, Spotify…), en JSON. Vacío = el que esté sonando."""
+    return _alexa("/reproduciendo", dispositivo=dispositivo)
+
+
+@mcp.tool(name="alexa_control")
+def alexa_control(accion: str, nivel: int = 50, dispositivo: str = "") -> str:
+    """Controla la música del Echo que está sonando: play, pausa, siguiente, anterior o volumen (con nivel 0-100)."""
+    r = _alexa("/control", accion=accion, valor=nivel, dispositivo=dispositivo)
+    return f"Listo: {accion}." if '"dispositivo"' in r else r
+
+
 @mcp.tool(name="alexa_dispositivos")
 def alexa_dispositivos() -> str:
     """Lista los Echos de la cuenta de Amazon y si están en línea."""
     return _alexa("/dispositivos")
 
 
+async def voz(request):
+    """Voz neuronal gratis (Microsoft Edge) para Monki: mucho más rápida que la voz sin internet de la consola.
+    POST /voz {"texto": "...", "voz": "es-MX-JorgeNeural", "tono": "-6Hz", "velocidad": "+0%"} → audio MP3."""
+    import edge_tts
+    from starlette.responses import Response
+    datos = await request.json()
+    texto = str(datos.get("texto", "")).strip()[:3000]
+    if not texto:
+        return JSONResponse({"error": "sin texto"}, status_code=400)
+    com = edge_tts.Communicate(texto, datos.get("voz") or "es-MX-JorgeNeural",
+                               pitch=datos.get("tono") or "-6Hz", rate=datos.get("velocidad") or "+0%")
+    audio = bytearray()
+    async for parte in com.stream():
+        if parte["type"] == "audio":
+            audio += parte["data"]
+    return Response(bytes(audio), media_type="audio/mpeg")
+
+
 def app_con_clave():
+    from starlette.requests import Request
     app = mcp.streamable_http_app()
 
     async def con_clave(scope, receive, send):
@@ -454,6 +666,13 @@ def app_con_clave():
             headers = dict(scope.get("headers") or [])
             if headers.get(b"authorization", b"").decode() != f"Bearer {TOKEN}":
                 await JSONResponse({"error": "clave incorrecta"}, status_code=401)(scope, receive, send)
+                return
+            if scope.get("path") == "/voz" and scope.get("method") == "POST":
+                try:
+                    resp = await voz(Request(scope, receive))
+                except Exception as e:
+                    resp = JSONResponse({"error": str(e)[:200]}, status_code=502)
+                await resp(scope, receive, send)
                 return
         await app(scope, receive, send)
 

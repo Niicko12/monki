@@ -30,6 +30,15 @@ class WakeWord(private val context: Context, private val onWake: () -> Unit) {
 
     /** Palabra del vocabulario que suena como el nombre ("monkey" ≈ "Monki"). */
     var word: String = "monkey"
+
+    /**
+     * Mientras Monki habla su propia voz entra al micrófono y a veces suena a "mon…".
+     * En modo estricto el nombre solo ya no basta: tiene que ir después de un "hey" (Monki casi nunca dice "hey").
+     * Sigue estricto un momento después (eco).
+     */
+    @Volatile var strict = false
+        set(v) { if (field && !v) strictUntil = System.currentTimeMillis() + STRICT_TAIL_MS; field = v }
+    @Volatile private var strictUntil = 0L
     val isListening get() = running
 
     fun load(onReady: (Boolean) -> Unit) {
@@ -116,6 +125,12 @@ class WakeWord(private val context: Context, private val onWake: () -> Unit) {
                 else System.currentTimeMillis() - heyAt < HEY_WINDOW_MS
             Log.d(TAG, "oí: ${if (withHey) "hey " else ""}${name.joinToString(" ")} ($conf)")
             val alone = ALONE_MIN[name.joinToString(" ")] ?: ALONE_DEFAULT
+            if (strict || System.currentTimeMillis() < strictUntil) {
+                // Tu "hey monkey" real llega con ~0.45 de confianza en el nombre; "mon" solo es demasiado común
+                val heyClear = prev != null && prev.optString("word") == "hey" && prev.optDouble("conf") >= 0.5
+                if (heyClear && conf >= 0.35 && name.joinToString(" ") != "mon") return true
+                continue
+            }
             if ((withHey && conf >= 0.3) || conf >= alone) return true
         }
         val tail = words.lastOrNull() ?: return false   // frase vacía (la pausa): conserva el "hey"
@@ -140,6 +155,7 @@ class WakeWord(private val context: Context, private val onWake: () -> Unit) {
         private const val RATE = 16_000
         private const val GAIN = 4
         private const val HEY_WINDOW_MS = 3_000L
+        private const val STRICT_TAIL_MS = 1_500L
         /** Cómo entiende el modelo en español la palabra dicha a la latina ("Monki" ≈ "mon qui"). */
         private val ALIASES = mapOf("monkey" to listOf("mon qui", "mon ki", "moni", "qui", "mon"))
         /** Seguridad mínima sin "hey" delante. "qui" y "moni" sueltos salen del ruido del juego: solo cuentan tras "hey". */

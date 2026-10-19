@@ -24,7 +24,31 @@ Cosas que costó encontrar en la RG353V con Android 11. Cada una dice qué pasab
 
 **Por qué:** los modelos TTS de Gemini tienen muy poca cuota gratis al día y responden 429. La suscripción Gemini Pro (app) **no** aplica a la API.
 
-**Cómo quedó:** si falla la voz de Gemini, Monki usa Piper sin internet y no vuelve a intentar con Gemini en 30 minutos.
+**Cómo quedó:** la voz principal es Edge (generada por `casa`); si no responde, Gemini; si falla (429), Piper sin internet, y no vuelve a intentar con Gemini en 30 minutos.
+
+## Monki esperaba 8 s después de cada pedido por voz
+
+**Qué pasaba:** todas las grabaciones duraban exactamente 8 s, aunque el pedido fuera corto.
+
+**Por qué:** el zumbido de 60/180 Hz del micrófono es casi tan fuerte como la voz. El detector medía la energía total, nunca notaba que la voz empezaba o terminaba y cortaba por el máximo de 8 s.
+
+**Cómo quedó:** el detector mide la energía después de un filtro paso alto de 300 Hz (dos biquads). Ahí la voz queda 3 a 5 veces por encima del ruido y corta 0.9 s después de que terminas. El audio que se manda a transcribir no se filtra.
+
+## Monki se activaba con su propia voz
+
+**Qué pasaba:** mientras hablaba, a veces pasaba a "Entendiendo…" y hacía cosas que nadie pidió.
+
+**Por qué:** la palabra de activación sigue escuchando mientras habla (para poder interrumpirlo) y su voz por la bocina sonaba a "mon…".
+
+**Cómo quedó:** modo estricto mientras habla y 1.5 s después: hace falta "hey" antes del nombre. No subas mucho los umbrales: un "hey monkey" real llega con ~0.45 de seguridad en el nombre.
+
+## Si Monki dice "Alexa", se activa el Echo
+
+La voz cambia "Alexa" por "la bocina" antes de hablar, y el *prompt* le prohíbe decirla.
+
+## Groq respondía 413 con conversaciones largas
+
+Groq limita a 8 000 tokens por minuto por modelo y cuenta los tokens de respuesta reservados. Ver [Proveedores](arquitectura.md#proveedores-agentthink): se recorta el historial y se fija `max_tokens`.
 
 ## Cambiar el idioma del motor de voz recarga el modelo
 
@@ -44,3 +68,7 @@ El micrófono por el conector de audífonos de la consola trae zumbido eléctric
 - **Zona horaria:** Android 11 trae datos viejos y aplica horario de verano en México, que se eliminó en 2022. Usa una zona fija: `adb shell service call alarm 3 s16 Etc/GMT+6`.
 - **Ubicación por IP:** con doble NAT puede salir otra ciudad. Configura `location`.
 - **Selector de carpetas de Android:** ignora `adb input tap`; solo responde a la cruceta.
+- **`am force-stop com.limber.asistente` apaga la accesibilidad** (`accessibility_enabled` queda en 0). Para recuperarla: vaciar `enabled_accessibility_services`, volver a poner el servicio y `accessibility_enabled 1`.
+- **adb y `Android/data` en Android 11:** `adb push` dice que copió pero el archivo no aparece. Usa `/data/local/tmp` y `run-as`.
+- **wttr.in con user agent de navegador** devuelve HTML en vez de texto: el widget usa el de curl.
+- **Spotify en los Echo:** `getPlayerInfo` devuelve todo vacío; la información está en `/api/np/list-media-sessions`.

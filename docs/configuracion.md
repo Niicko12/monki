@@ -12,6 +12,9 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es <aj
 
 | Ajuste | Qué es | Por defecto |
 |---|---|---|
+| `groq_key` | Clave de Groq (agente y Whisper) | (ninguna) |
+| `nvidia_key` | Clave de NVIDIA NIM | (ninguna) |
+| `openrouter_key` | Clave de OpenRouter (modelos `:free`) | (ninguna) |
 | `key` | Clave de la API de Gemini | (ninguna) |
 | `model` | Modelo para pensar | `gemini-3.5-flash-lite` (con respaldos ante 429) |
 | `tts_model` | Modelo de voz de Gemini | `gemini-3.8-flash-lite-tts` |
@@ -22,7 +25,12 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es <aj
 | `wake_word` | Palabra de activación (debe existir en el vocabulario de Vosk) | `monkey` |
 | `mcp_servers` | Servidores MCP, uno por línea: `alias\|url\|clave` | vacío |
 | `wol` | Equipos para Wake-on-LAN, uno por línea: `nombre\|MAC\|IP` | vacío |
+| `color` | Color de la cara: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco, `#RRGGBB` o `ánimo` | `verde` |
+| `pronunciar` | Palabras que la voz lee mal, una por línea (`\n`): `Oscar=Óscar` | vacío |
 | `decir` | Prueba de voz: dice ese texto | (no se guarda) |
+| `pedir` | Prueba: hace ese pedido escrito | (no se guarda) |
+| `sin_gemini` (`--ez … true`) | Prueba: salta Gemini 10 minutos | (no se guarda) |
+| `solo_local` (`--ez … true`) | Prueba: responde solo el modelo local | (no se guarda) |
 
 Permiso extra (una vez, o tras desinstalar y reinstalar):
 
@@ -45,6 +53,18 @@ Se crean y borran por voz ("crea una rutina…", "borra la rutina…"). Vienen d
 
 La voz suena 10 % más grave y lenta (estilo Jarvis): se baja la frecuencia de muestreo del WAV. La constante es `DEEPEN` en `OfflineVoice.kt`.
 
+### Modelo local
+
+El archivo va en la memoria interna de la app (`files/llm.gguf`). En Android 11, adb no puede escribir de verdad en `Android/data/…` (dice que copió, pero el archivo no aparece), por eso se copia con `run-as`:
+
+```bash
+adb push modelo.gguf /data/local/tmp/llm.gguf
+adb shell "run-as com.limber.asistente sh -c 'mkdir -p files && cp /data/local/tmp/llm.gguf files/llm.gguf'"
+adb shell rm /data/local/tmp/llm.gguf
+```
+
+Para compilar hacen falta el NDK `27.2.12479018` y CMake `3.22.1` del SDK de Android, y el submódulo (`git submodule update --init`).
+
 ## `casa` (Mac o Windows)
 
 | Archivo | Para qué |
@@ -52,6 +72,8 @@ La voz suena 10 % más grave y lenta (estilo Jarvis): se baja la frecuencia de m
 | `casa/.env` | `CASA_TOKEN=…`; se crea solo, no se sube |
 | `configuracion/launchd/com.limber.casa.plist` | Arranque automático en macOS (cambia `$HOME` por tu ruta y cópialo a `~/Library/LaunchAgents/`) |
 | `casa/instalar-windows.ps1` | Instalación en Windows |
+
+Dependencias nuevas: `edge-tts` (voz) y `pyautogui` (teclado y ratón). En macOS, teclado y ratón requieren permiso de **Accesibilidad** para `uv`/`python`. `pc_captura` y `pc_raton` usan solo la pantalla principal.
 
 Si la Mac cambia de IP, Monki deja de alcanzar `casa`. Vuelve a mandar `mcp_servers` con la IP nueva, o reserva la IP en el router.
 

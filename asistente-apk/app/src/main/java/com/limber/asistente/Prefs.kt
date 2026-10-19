@@ -10,6 +10,19 @@ class Prefs(context: Context) {
         get() = sp.getString("api_key", "") ?: ""
         set(v) = sp.edit().putString("api_key", v.trim()).apply()
 
+    /** Claves de los respaldos gratis cuando Gemini se queda sin cuota (ver OpenAiCompat). */
+    var groqKey: String
+        get() = sp.getString("groq_key", "") ?: ""
+        set(v) = sp.edit().putString("groq_key", v.trim()).apply()
+
+    var nvidiaKey: String
+        get() = sp.getString("nvidia_key", "") ?: ""
+        set(v) = sp.edit().putString("nvidia_key", v.trim()).apply()
+
+    var openRouterKey: String
+        get() = sp.getString("openrouter_key", "") ?: ""
+        set(v) = sp.edit().putString("openrouter_key", v.trim()).apply()
+
     var model: String
         get() = sp.getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
         set(v) = sp.edit().putString("model", v.trim().ifEmpty { DEFAULT_MODEL }).apply()
@@ -62,6 +75,11 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putString("name", v.trim().ifEmpty { "Monki" }).apply()
 
     /** Dónde vive el usuario: clima y respuestas locales (por IP puede salir otra ciudad). Vacío = ubicación por IP. */
+    /** Cómo pronunciar palabras en voz alta, una por línea: "Oscar=Óscar" (el texto en pantalla no cambia). */
+    var pronunciations: String
+        get() = sp.getString("pronunciar", "") ?: ""
+        set(v) = sp.edit().putString("pronunciar", v.trim()).apply()
+
     var location: String
         get() = sp.getString("location", "") ?: ""
         set(v) = sp.edit().putString("location", v.trim()).apply()
@@ -78,17 +96,17 @@ class Prefs(context: Context) {
         get() = sp.getString("wake_word", "monkey") ?: "monkey"
         set(v) = sp.edit().putString("wake_word", v.trim().lowercase().ifEmpty { "monkey" }).apply()
 
-    /** Voz de Gemini y su estilo (al estilo de un mayordomo IA). */
+    /** Color de la cara: nombre (verde, azul, rosa…), #RRGGBB o "ánimo" (cambia con el estado de ánimo). */
+    var faceColor: String
+        get() = sp.getString("face_color", "verde") ?: "verde"
+        set(v) = sp.edit().putString("face_color", v.trim().lowercase().ifEmpty { "verde" }).apply()
+
+    /** Voz de Gemini (Charon: grave, de mayordomo IA). */
     var voiceName: String
         get() = sp.getString("voice_name", "Charon") ?: "Charon"
         set(v) = sp.edit().putString("voice_name", v.trim().ifEmpty { "Charon" }).apply()
 
-    var voiceStyle: String
-        get() = sp.getString("voice_style", DEFAULT_VOICE_STYLE) ?: DEFAULT_VOICE_STYLE
-        set(v) = sp.edit().putString("voice_style", v.trim().ifEmpty { DEFAULT_VOICE_STYLE }).apply()
-
     companion object {
-        const val DEFAULT_VOICE_STYLE = "Voz masculina grave, serena y elegante, de mayordomo británico refinado y un poco irónico; habla con calma y precisión, en español"
         const val DEFAULT_PERSONA = "Eres Monki, el asistente personal del usuario: un mayordomo IA educado, sereno y eficiente, con humor seco y elegante (al estilo del asistente de las películas de superhéroes). Le dices \"señor\" (y su nombre, si lo sabes). Hablas español latino."
         const val DEFAULT_MODEL = "gemini-3.5-flash-lite"
         const val DEFAULT_TTS_MODEL = "gemini-3.8-flash-lite-tts"

@@ -42,7 +42,8 @@ class Reply(val text: String, val emotion: Emotion)
 /** Bucle de conversación con Gemini usando llamadas a funciones sobre herramientas MCP (locales y remotas). */
 class Agent(private val prefs: Prefs, private val controls: Controls, private val tools: () -> List<Tool>,
             private val facts: () -> List<String> = { emptyList() },
-            private val routines: () -> Map<String, String> = { emptyMap() }) {
+            private val routines: () -> Map<String, String> = { emptyMap() },
+            private val mood: () -> Animo = { Animo.TRANQUILO }) {
 
     private val history = JSONArray()
 
@@ -62,12 +63,17 @@ ${if (prefs.userName.isBlank()) "" else "El usuario se llama ${prefs.userName}: 
 ${facts().let { f -> if (f.isEmpty()) "" else "Lo que sabes del usuario:\n" + f.joinToString("\n") { "- $it" } + "\n" }}Cuando el usuario te cuente algo personal importante (nombre, gustos, fechas), guárdalo con memoria.guardar.
 Para temporizadores, alarmas y recordatorios usa las herramientas alarma.*.
 ${routines().let { r -> if (r.isEmpty()) "" else "Rutinas del usuario (si dice el nombre de una, o algo muy parecido, haz sus pasos en orden con tus herramientas y al final responde en una frase):\n" + r.entries.joinToString("\n") { "- ${it.key}: ${it.value}" } + "\n" }}Para crear, cambiar o borrar rutinas usa rutina.guardar y rutina.borrar.
-En la consola no hay Spotify: si piden música o Spotify, pídeselo a Alexa con alexa_comando (por ejemplo "pon Bad Bunny en Spotify"); va al Echo "Cuarto 2" si no dicen otro.
+Música: en la consola no hay Spotify. Si piden música (no hace falta que digan Alexa), usa alexa_comando con "pon … en Spotify"
+(va al Echo principal si no dicen otro); para pausar, seguir, cambiar de canción o volumen usa alexa_control; para saber qué suena, alexa_reproduciendo.
+NUNCA digas la palabra "Alexa" en tu respuesta: al oírla se activa el Echo. Di "la bocina" o "el Echo".
+Tu estado de ánimo ahora: ${mood().tag}. Que se note un poco en tu tono, sin exagerar y sin dejar de ayudar.
+Si te piden cambiar tu ánimo usa cara.animo; para el color de tu cara, cara.color.
 Hoy es ${java.text.SimpleDateFormat("EEEE d 'de' MMMM 'de' yyyy, HH:mm", java.util.Locale("es")).format(java.util.Date())}.
 
 Formato de respuesta: empieza SIEMPRE con tu emoción entre corchetes y luego el texto, por ejemplo "[feliz] ¡Listo, ya está abierto!".
 Emociones válidas: ${Emotion.entries.joinToString(", ") { it.tag }}.
-El texto se lee en voz alta: nada de markdown, listas ni emojis; máximo 3 frases cortas.
+El texto se lee en voz alta: nada de markdown, listas ni emojis. Responde solo lo necesario: ve directo a la respuesta,
+sin introducciones, sin repetir la pregunta y sin explicar lo que vas a hacer; normalmente 1 o 2 frases cortas (máximo 3).
 
 No recibes la pantalla automáticamente. Para verla llama self.screen.capture; úsala solo cuando la necesites
 (antes de tocar algo o para comprobar un resultado), porque cada captura gasta cuota. Para leer textos y botones
@@ -142,8 +148,10 @@ Si el pedido es riesgoso o ambiguo, pregunta primero.
                 .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt(all)))))
                 .put("contents", history)
                 .put("tools", geminiTools(all))
+                // Respuestas de asistente de voz: pensar lo mínimo responde más rápido
+                .put("generationConfig", JSONObject().put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal")))
             status("pensando")
-            val res = withContext(Dispatchers.IO) { gemini.generateWithFallback(listOf(prefs.model) + FALLBACK_MODELS, body) }
+            val res = withContext(Dispatchers.IO) { think(gemini, body) }
             val content = res.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
                 ?: return Reply("Gemini no respondió nada. Intenta de nuevo.", Emotion.CONFUNDIDO)
             if (!content.has("role")) content.put("role", "model")
@@ -177,8 +185,44 @@ Si el pedido es riesgoso o ambiguo, pregunta primero.
         return Reply("Hice varios pasos y me detuve para no pasarme. ¿Sigo?", Emotion.PENSANDO)
     }
 
+    /**
+     * Pedidos normales: Groq/NVIDIA primero (contestan más rápido y no gastan la cuota de Gemini) y Gemini al final.
+     * Si hay una captura de pantalla en la conversación, Gemini primero: es el único que ve imágenes.
+     * Tras un fallo de Gemini no se le vuelve a intentar por un rato, para no perder tiempo en cada paso.
+     */
+    private fun think(gemini: Gemini, body: JSONObject): JSONObject {
+        var error: Exception? = null
+        val tryGemini: () -> JSONObject? = {
+            if (prefs.apiKey.isNotBlank() && System.currentTimeMillis() - geminiFailedAt > GEMINI_RETRY_MS) {
+                try { gemini.generateWithFallback(listOf(prefs.model) + FALLBACK_MODELS, body) }
+                catch (e: Exception) { error = e; geminiFailedAt = System.currentTimeMillis(); android.util.Log.w("Asistente", "Gemini: ${e.message}"); null }
+            } else null
+        }
+        val seesImage = body.optJSONArray("contents")?.toString()?.contains("\"image/") == true
+        if (seesImage) tryGemini()?.let { return it }
+        for (p in if (onlyLocal) emptyList() else OpenAiCompat.providers(prefs)) {
+            try { return p.generateWithFallback(body).also { android.util.Log.i("Asistente", "Respondió ${p.name}") } }
+            catch (e: Exception) { android.util.Log.w("Asistente", "${p.name}: ${e.message}"); error = e }
+        }
+        if (!seesImage) tryGemini()?.let { return it }
+        // Último recurso: el modelo dentro de la consola (sin herramientas, pero sin límites ni internet)
+        if (LocalLlm.available) {
+            try { return LocalLlm.generate(body, prefs.persona).also { android.util.Log.i("Asistente", "Respondió el modelo local") } }
+            catch (e: Exception) { android.util.Log.w("Asistente", "Modelo local: ${e.message}"); error = e }
+        }
+        throw error ?: RuntimeException("Gemini descansa unos minutos y no hay respaldo configurado.")
+    }
+
     companion object {
         const val MAX_STEPS = 12
+        private const val GEMINI_RETRY_MS = 10 * 60_000L
+        @Volatile private var geminiFailedAt = 0L
+
+        /** Para probar los respaldos: hace como si Gemini acabara de fallar. */
+        fun skipGemini() { geminiFailedAt = System.currentTimeMillis() }
+
+        /** Solo para pruebas: usar únicamente el modelo local. */
+        @Volatile var onlyLocal = false
         val FALLBACK_MODELS = listOf("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest")
     }
 }

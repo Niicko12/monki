@@ -11,10 +11,10 @@ import java.net.URLEncoder
 object Web {
     private const val UA = "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
 
-    private fun get(url: String, max: Int = 400_000): String {
+    private fun get(url: String, max: Int = 400_000, ua: String = UA): String {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000; readTimeout = 15_000; instanceFollowRedirects = true
-            setRequestProperty("User-Agent", UA); setRequestProperty("Accept-Language", "es-MX,es;q=0.9")
+            setRequestProperty("User-Agent", ua); setRequestProperty("Accept-Language", "es-MX,es;q=0.9")
         }
         return conn.inputStream.bufferedReader().use { r ->
             val buf = CharArray(max); var n = 0
@@ -48,6 +48,13 @@ object Web {
         val now = get("https://wttr.in/$q?format=$fmt&lang=es").trim()
         val days = runCatching { get("https://wttr.in/$q?format=%25C+%25t&lang=es&2").trim() }.getOrDefault("")
         return "Ahora: $now" + if (days.isNotBlank() && days.length < 300) "\nPronóstico: $days" else ""
+    }
+
+    /** Clima corto para el widget, por ejemplo "⛅ +23°C". */
+    fun weatherShort(home: String): String {
+        val q = URLEncoder.encode(home, "UTF-8").replace("+", "%20")
+        // Con user agent de navegador wttr.in devuelve HTML; con el de curl, texto
+        return get("https://wttr.in/$q?format=%25c%25t&lang=es", ua = "curl/8.0").trim().replace(Regex("\\s+"), " ")
     }
 
     fun tools(prefs: Prefs): List<Tool> = listOf(

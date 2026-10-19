@@ -58,18 +58,21 @@ class Gemini(private val apiKey: String) {
         return if (text.contains("(nada)")) "" else text
     }
 
-    /** Convierte texto en voz. Devuelve un WAV (o null si falla). */
-    fun speech(ttsModel: String, text: String, voice: String = "Charon", style: String = ""): ByteArray? {
+    /**
+     * Convierte texto en voz. Devuelve un WAV (o null si falla).
+     * Solo se manda el texto: los modelos TTS "lite" leían en voz alta cualquier instrucción de estilo ("…Di: …").
+     */
+    fun speech(ttsModel: String, text: String, voice: String = "Charon"): ByteArray? {
         for (m in listOf(ttsModel, "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview").distinct()) {
-            try { return speechWith(m, text, voice, style) } catch (_: QuotaException) {}
+            try { return speechWith(m, text, voice) } catch (_: QuotaException) {}
         }
         return null
     }
 
-    private fun speechWith(ttsModel: String, text: String, voice: String, style: String): ByteArray? {
+    private fun speechWith(ttsModel: String, text: String, voice: String): ByteArray? {
         val body = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts",
-                JSONArray().put(JSONObject().put("text", "${style.ifBlank { "Tono amigable y natural, en español latino" }}. Di: $text")))))
+                JSONArray().put(JSONObject().put("text", text)))))
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray().put("AUDIO"))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject()

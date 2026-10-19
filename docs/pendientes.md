@@ -2,14 +2,16 @@
 
 ## En curso
 
-- [ ] Afinar "hey monki" con ruido de juego (umbrales y gramática) sin que se active solo.
-- [ ] Bajar la espera de cada respuesta: hoy son unos 6 s con la voz sin internet.
+- [ ] Probar a fondo "hey monki" mientras Monki habla (modo estricto) con ruido de juego.
+- [ ] Instalar `casa` en la PC con Windows y conectarla a la consola.
+- [ ] Permiso de Accesibilidad en macOS para que `pc_teclado` y `pc_raton` funcionen.
 
 ## Ideas
 
+- [ ] **Muse Gadget SDK (Meta):** convertir a Monki en un "gadget" de Muse para usarlo como otro cerebro con voz y que Muse controle la consola. Requiere cuenta y token de Muse, emparejar por Bluetooth LE (falta comprobar si la consola puede anunciarse como periférico) y portar a Kotlin el cifrado Noise XX, el emparejamiento v5 y el canal `/link-control` (~2 500 líneas de Python). No exponer `system.run`; solo las herramientas de Monki.
+- [ ] **OpenClaw** en la Mac como agente para tareas largas, conectado por MCP.
 - [ ] **Abrir juegos por voz:** buscar la ROM en la SD y abrirla directo en su emulador.
 - [ ] **Controles de juego por voz:** pausar, guardar o cargar partida.
-- [ ] **Garmin Fenix 8:** Connect IQ no da micrófono ni voz a las apps de terceros. Opciones: usar el asistente del celular desde el reloj, o una app de botones rápidos que llame a `casa` publicado por HTTPS.
-- [ ] **Skill de Alexa** ("Alexa, pídele a Monki que…"): se diseñó y se descartó por ahora, porque necesita cuenta de desarrollador de Amazon y publicar `casa` por HTTPS.
-- [ ] Publicar `casa` con nombre fijo en la red (mDNS) para no depender de la IP de la Mac.
-- [ ] Gemini Pro y búsqueda de Google (*grounding*) si algún día se activa la facturación de la API.
+- [ ] **Reloj inteligente:** usar el asistente del celular desde el reloj, o una app de botones rápidos que llame a `casa` publicado por HTTPS.
+- [ ] Publicar `casa` con nombre fijo en la red (mDNS) para no depender de la IP de la computadora.
+- [ ] Modelo local más capaz si algún día hay más RAM (la consola tiene 2 GB).

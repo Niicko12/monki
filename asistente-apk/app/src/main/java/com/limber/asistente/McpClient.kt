@@ -71,6 +71,19 @@ class McpClient(val alias: String, private val url: String, private val token: S
         return ToolResult(text.toString().trim().ifEmpty { "Listo." }, jpeg)
     }
 
+    /** Voz neuronal (Edge) que genera el hub "casa" en POST /voz; MP3 o null si no responde rápido. */
+    fun voice(text: String): ByteArray? {
+        val conn = (URL(url.substringBeforeLast("/mcp") + "/voz").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; connectTimeout = 2_000; readTimeout = 6_000; doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
+        }
+        return try {
+            conn.outputStream.use { it.write(JSONObject().put("texto", text).toString().toByteArray()) }
+            if (conn.responseCode != 200) null else conn.inputStream.use { it.readBytes() }.takeIf { it.size > 500 }
+        } finally { conn.disconnect() }
+    }
+
     /** Las herramientas remotas como [Tool], con prefijo del alias para no chocar con las locales. */
     fun asTools(): List<Tool> = tools.map { t ->
         val remote = t.getString("name")

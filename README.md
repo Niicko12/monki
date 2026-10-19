@@ -1,115 +1,193 @@
 # Monki
 
-Asistente de voz estilo mayordomo para la consola **Anbernic RG353V** (Android 11). Lo despiertas con "hey monki", entiende español y actúa: busca en internet, maneja la consola, controla la Mac, las teles, los celulares y los Echo de Alexa de la casa.
+**Asistente de voz con cara, estilo mayordomo IA, para la consola Anbernic RG353V (Android 11).**
+Lo despiertas con *"hey monki"*, te entiende en español y actúa: contesta lo que sea, busca en internet, maneja la consola, controla tu Mac y tu PC con Windows, pone música en los Echo de la casa y te enseña en pantalla lo que está sonando.
 
-> **Estado:** en desarrollo activo. Funciona a diario en una consola real, pero todavía hay cosas por pulir (ver [Pendientes](docs/pendientes.md)).
+Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monki pasa sola a la siguiente, y si no queda ninguna (o no hay internet) responde con un modelo que corre **dentro de la consola**.
 
-Todo usa servicios gratuitos: la cuota gratis de la API de Gemini, Vosk y Piper sin internet, y DuckDuckGo y wttr.in para internet. No hace falta cuenta de pago.
+> **Estado:** en desarrollo activo. Se usa a diario en una consola real; lo que falta está en [Pendientes](docs/pendientes.md).
 
-## Qué puede hacer
+---
 
-| Área | Ejemplos |
+## Lo que hace
+
+| Área | Qué puedes pedirle |
 |---|---|
-| **Conversar y buscar** | Preguntas generales (Gemini Flash Lite), búsquedas en internet (DuckDuckGo), leer páginas, clima (wttr.in) |
-| **Tiempo y memoria** | Temporizadores, alarmas, recordatorios; recuerda datos del usuario entre conversaciones |
-| **Rutinas** | Frases que hacen varias cosas ("buenas noches": apaga luces con Alexa, baja brillo y volumen). Se crean por voz |
-| **La consola** | Ve la pantalla, toca y desliza, abre apps y juegos, escribe, volumen, brillo, batería |
-| **La Mac** (vía `casa`) | Estado, capturas, abrir apps/páginas, volumen, hablar por sus bocinas, avisos, música |
-| **Teles y celulares** (vía `casa`) | Chromecast/YouTube, celulares Android por adb, Wake-on-LAN, focos |
-| **Alexa** (vía `casa`) | Mandar órdenes a los Echo como si les hablaras (música en Spotify, luces, rutinas) y hacerlos hablar |
+| **Conversar** | Cualquier pregunta, en 1 o 2 frases directas. Personalidad de mayordomo con humor seco |
+| **Internet** | Búsquedas (DuckDuckGo), leer páginas, clima (wttr.in). Sin gastar cuota de IA |
+| **Tiempo y memoria** | Temporizadores, alarmas, recordatorios; recuerda tus datos entre conversaciones |
+| **Rutinas** | Frases que hacen varias cosas ("buenas noches"). Se crean y se borran hablando |
+| **La consola** | Ve la pantalla, toca, desliza, abre apps y juegos, escribe, volumen, brillo, batería |
+| **Mac y Windows** (vía `casa`) | Estado (CPU, RAM, disco, batería), captura, abrir y cerrar apps, teclado y mouse, portapapeles, buscar y abrir archivos, brillo, silencio, bloquear, dormir, reiniciar o apagar (con confirmación), música, avisos |
+| **Teles y celulares** (vía `casa`) | Chromecast y YouTube, celulares Android por adb, Wake-on-LAN |
+| **Música en los Echo** (vía `casa`) | "Pon música relajante en Spotify", pausa, siguiente, volumen. No hace falta decir "Alexa" |
+
+### La cara
+
+- **Ojos y boca animados** con 20 expresiones. La boca se mueve con el volumen real de la voz.
+- **Estado de ánimo** que dura entre conversaciones: sube con respuestas alegres, baja con tristes, se cansa de noche o con poca batería y se aburre si no le hablas.
+- **Color configurable** por voz ("ponte azul"), en ajustes, o *según su ánimo*.
+- **Ánimo según la música:** cuando cambia la canción, decide si es bailable, alegre, tranquila, triste o pesada; la cara toma ese ánimo y su color, y se mece si la canción es alegre.
+
+### La pantalla
+
+- **Widgets** a los lados de la cara: hora y fecha, clima, próxima alarma y cada computadora conectada (batería, CPU, RAM).
+- **Reproductor:** si suena algo en un Echo, aparece una barra con portada, canción, artista y botones ⏮ ⏯ ⏭.
+
+---
+
+## Cerebro: varias IA gratis en cadena
+
+```
+pedido ─► Groq ──► NVIDIA ──► OpenRouter ──► Gemini ──► modelo local (en la consola)
+          rápido   más cupo   emergencia     ve imágenes  sin internet ni límites
+```
+
+- **Groq** (`gpt-oss-120b`, `qwen3.8-27b`, `gpt-oss-20b`) contesta primero: ~1.5 s.
+- **Gemini** va primero solo cuando Monki necesita *ver* la pantalla (es el único que entiende imágenes).
+- Si un proveedor responde 429, 413, 404, 410 o tarda de más, pasa al siguiente modelo y luego al siguiente proveedor.
+- **Modelo local:** Qwen2.5-0.5B con [llama.cpp](https://github.com/ggml-org/llama.cpp) compilado dentro de la app. Conversa sin internet (~8 s por respuesta), pero no usa herramientas.
+
+Para entender tu voz usa **Whisper** de Groq (~1 s), con Gemini de respaldo.
+
+## Voz
+
+```
+Edge (es-MX, generada en la Mac) ─► Gemini TTS ─► Piper sin internet (en la consola)
+           ~1.5 s                                          ~3.5 s
+```
+
+- La voz neuronal de Microsoft Edge la genera el hub `casa` y la consola solo la reproduce.
+- **Pronunciaciones** configurables para nombres que la voz lee mal (`Oscar=Óscar`).
+- Monki **nunca dice "Alexa"** en voz alta (la cambia por "la bocina"), para no despertar los Echo de la casa.
+
+---
 
 ## Cómo está armado
 
 ```
-            "hey monki"
-                │
-┌───────────────▼────────────────────────────┐        ┌───────────────────────────────┐
-│ Consola Anbernic RG353V  (asistente-apk)   │  MCP   │ Mac  (casa)                   │
-│                                            │ ─────► │                               │
-│ Vosk (sin internet) → palabra de activación│  HTTP  │ casa.py  servidor MCP :8800   │
-│ Gemini API → entiende, piensa, usa tools   │ +clave │  ├─ Mac, red, teles, Android  │
-│ Gemini TTS o Piper (sin internet) → voz    │        │  └─ alexa/alexa.js :8801 ─────┼──► Echos
-│ Servicio de accesibilidad → ve y toca      │        │     (solo 127.0.0.1)          │
-└────────────────────────────────────────────┘        └───────────────────────────────┘
+              "hey monki"
+                   │
+┌──────────────────▼───────────────────────────┐        ┌────────────────────────────────┐
+│ Consola RG353V  (asistente-apk, Kotlin)      │  MCP   │ Mac o Windows  (casa, Python)  │
+│                                              │ ─────► │                                │
+│ Vosk (sin internet) → "hey monki"            │  HTTP  │ casa.py  servidor MCP :8800    │
+│ Groq / NVIDIA / Gemini → piensa y usa tools  │ +clave │  ├─ computadora, red, teles    │
+│ llama.cpp (Qwen 0.5B) → último respaldo      │        │  ├─ POST /voz  (voz Edge)      │
+│ Edge / Gemini / Piper → voz                  │ ◄───── │  └─ alexa/alexa.js :8801 ──────┼──► Echos
+│ Accesibilidad → ve y toca la pantalla        │  voz   │     (solo 127.0.0.1)           │
+└──────────────────────────────────────────────┘        └────────────────────────────────┘
 ```
 
 | Carpeta | Qué es |
 |---|---|
-| [`asistente-apk/`](asistente-apk) | App Android en Kotlin (`com.limber.asistente`): Monki en la consola |
-| [`casa/`](casa) | Hub MCP en Python (FastMCP) para Mac o Windows, más el puente de Alexa en Node |
+| [`asistente-apk/`](asistente-apk) | App Android en Kotlin: Monki en la consola (incluye llama.cpp como submódulo) |
+| [`casa/`](casa) | Hub MCP en Python (FastMCP) para Mac o Windows, voz Edge y puente de Alexa en Node |
 | [`agente/`](agente) | Versión de escritorio: el agente corre en la Mac y maneja la consola por adb |
 | [`herramientas/`](herramientas) | Descarga del modelo Vosk y scripts para analizar el reconocimiento de voz |
 | [`configuracion/`](configuracion) | Plantillas de LaunchAgent (macOS) y controles de PPSSPP |
-| [`docs/`](docs) | Configuración, problemas conocidos y pendientes |
+| [`docs/`](docs) | [Arquitectura](docs/arquitectura.md), [configuración](docs/configuracion.md), [problemas conocidos](docs/problemas-conocidos.md), [pendientes](docs/pendientes.md) |
 
-Más detalle en [docs/arquitectura.md](docs/arquitectura.md).
+---
 
-## Instalación rápida
+## Instalación
 
-**Requisitos:** consola Android 11 con depuración USB (probado en RG353V), una Mac con Homebrew, y una clave gratis de la [API de Gemini](https://aistudio.google.com/apikey).
+**Necesitas:** una consola Android 11 con depuración USB (probado en RG353V), una Mac con Homebrew (o una PC con Windows para `casa`) y claves **gratis** de [Groq](https://console.groq.com/keys), [NVIDIA](https://build.nvidia.com) y/o [Gemini](https://aistudio.google.com/apikey). Con una basta; con varias, Monki casi nunca se queda sin respuesta.
 
 ### 1. App en la consola
 
 ```bash
+git clone --recursive https://github.com/Niicko12/monki.git    # --recursive trae llama.cpp
+cd monki
 herramientas/descargar-modelo-vosk.sh          # modelo de voz para "hey monki" (~58 MB)
+
 cd asistente-apk
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+"$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
 ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 
-# Permiso para prender/apagar el servicio de toques (ver docs/problemas-conocidos.md)
+# Permiso para prender y apagar el servicio de toques (ver docs/problemas-conocidos.md)
 adb shell pm grant com.limber.asistente android.permission.WRITE_SECURE_SETTINGS
 
-# Clave de Gemini, tu nombre y tu ciudad
-adb shell "am start -n com.limber.asistente/.MainActivity --es key 'TU_CLAVE' --es user_name 'Tu nombre' --es location 'Tu ciudad, Estado, País'"
+# Tus claves, tu nombre y tu ciudad (se guardan solo en la consola)
+adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity \
+  --es groq_key 'TU_CLAVE_GROQ' --es nvidia_key 'TU_CLAVE_NVIDIA' --es key 'TU_CLAVE_GEMINI' \
+  --es user_name 'Tu nombre' --es location 'Tu ciudad, Estado, País'"
 ```
 
-Después, en la consola: **Ajustes → Accesibilidad → Monki → activar**, y dale permiso de micrófono.
+En la consola: **Ajustes → Accesibilidad → Monki → activar**, y dale permiso de micrófono.
 
-**Voz sin internet (recomendada):** cuando se acaba la cuota gratis de voz de Gemini, Monki usa Piper. Instala el motor de voz [sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/tts/apk-engine.html) con la voz `es_MX-ald-medium` (arm64).
+### 2. Modelo local (opcional, recomendado)
 
-### 2. Hub `casa` en la Mac (opcional)
+```bash
+curl -L -o qwen.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf
+adb push qwen.gguf /data/local/tmp/llm.gguf
+adb shell "run-as com.limber.asistente sh -c 'mkdir -p files && cp /data/local/tmp/llm.gguf files/llm.gguf'"
+adb shell rm /data/local/tmp/llm.gguf
+```
+
+### 3. Voz sin internet (opcional)
+
+Instala el motor [sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/tts/apk-engine.html) con la voz `es_MX-ald-medium` (arm64) y ponlo como motor del sistema.
+
+### 4. Hub `casa` en la computadora (opcional)
 
 ```bash
 cd casa
 uv run casa.py      # la primera vez crea .env con CASA_TOKEN
 ```
 
-Para que arranque solo, usa la plantilla `configuracion/launchd/com.limber.casa.plist`. Luego conecta Monki al hub:
+- **macOS:** arranque automático con la plantilla `configuracion/launchd/com.limber.casa.plist`. Para que Monki use el teclado y el mouse, da permiso de *Accesibilidad* a `uv`/`python`.
+- **Windows:** `powershell -ExecutionPolicy Bypass -File .\instalar-windows.ps1` como administrador; al final imprime la línea para la consola.
+
+Conecta Monki al hub:
 
 ```bash
-adb shell "am start -n com.limber.asistente/.MainActivity --es mcp_servers 'casa|http://IP_DE_LA_MAC:8800/mcp|CASA_TOKEN'"
+adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es mcp_servers 'casa|http://IP_DE_LA_MAC:8800/mcp|CASA_TOKEN'"
 ```
 
-### 3. Alexa (opcional, no oficial)
+### 5. Echo de Alexa (opcional, no oficial)
 
 ```bash
 cd casa/alexa && npm install && ALEXA_PRINCIPAL="Nombre de tu Echo" node alexa.js
 ```
 
-Abre `http://127.0.0.1:3456` en la Mac e inicia sesión en Amazon. La sesión queda en `alexa-cookie.json`, que **nunca** debe subirse ni compartirse. Usa [alexa-remote2](https://github.com/Apollon77/alexa-remote), que no es oficial y puede dejar de funcionar si Amazon cambia algo.
+Abre `http://127.0.0.1:3456` en la Mac e inicia sesión en Amazon. Usa [alexa-remote2](https://github.com/Apollon77/alexa-remote), que no es oficial y puede dejar de funcionar si Amazon cambia algo.
 
 Todos los ajustes están en [docs/configuracion.md](docs/configuracion.md).
 
+---
+
 ## Uso
 
-- **"hey monki"** (o "monki") o el botón **X**: escucha. **B** cancela. La burbuja abre el panel.
-- Pídele lo que sea: "¿cómo estará el clima mañana?", "pon un temporizador de 10 minutos", "abre PPSSPP", "pon música en Spotify en el comedor", "buenas noches".
-- Crea rutinas hablando: "crea una rutina 'a jugar' que suba el brillo a 80 y abra PPSSPP".
+- **"hey monki"** o el botón **X**: escucha. **B** interrumpe. Mientras habla también lo cortas con "hey monki".
+- Ejemplos: *"¿cómo estará el clima mañana?"*, *"pon un temporizador de 10 minutos"*, *"abre PPSSPP"*, *"pon música relajante en Spotify"*, *"siguiente canción"*, *"¿cómo está mi Mac?"*, *"cierra Chrome en la Mac"*, *"ponte morado"*, *"buenas noches"*.
+- Rutinas por voz: *"crea una rutina 'a jugar' que suba el brillo a 80 y abra PPSSPP"*.
+
+## Privacidad y secretos
+
+- Las claves de API, tu nombre, tu ciudad y los servidores se guardan **solo en la consola** (preferencias de la app), nunca en el código.
+- `casa/.env` (clave del hub), `casa/alexa/alexa-cookie.json` (sesión de Amazon), logs, modelos y APKs están en `.gitignore`. **No los subas ni los compartas.**
+- El hub `casa` exige su clave en cada petición y el puente de Alexa solo escucha en `127.0.0.1`.
 
 ## Problemas conocidos
 
 Lo aprendido a golpes está en [docs/problemas-conocidos.md](docs/problemas-conocidos.md). Lo más importante:
+
 - Un servicio de accesibilidad con permiso de gestos rompe la cruceta y el stick en los emuladores.
+- El micrófono trae un zumbido de 60/180 Hz casi tan fuerte como la voz: hay que filtrarlo para saber cuándo terminaste de hablar.
 - El reproductor de Rockchip se traba si se le cambia la velocidad.
-- La cuota gratis de voz de Gemini se acaba rápido.
+- Las cuotas gratis se acaban rápido: por eso la cadena de proveedores y el modelo local.
 
 ## Créditos y licencias
 
-- [Vosk](https://alphacephei.com/vosk/) (Apache 2.0): reconocimiento de voz sin internet.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) y [Qwen2.5](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (Apache 2.0): modelo local.
+- [Vosk](https://alphacephei.com/vosk/) (Apache 2.0): palabra de activación sin internet.
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) y [Piper](https://github.com/rhasspy/piper): voz sin internet.
-- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), [alexa-remote2](https://github.com/Apollon77/alexa-remote), [PyChromecast](https://github.com/home-assistant-libs/pychromecast).
+- [edge-tts](https://github.com/rany2/edge-tts): voz neuronal de Microsoft Edge.
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), [alexa-remote2](https://github.com/Apollon77/alexa-remote), [PyChromecast](https://github.com/home-assistant-libs/pychromecast), [PyAutoGUI](https://github.com/asweigart/pyautogui).
 - Inspirado en [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32).
 
 Código bajo licencia [MIT](LICENSE).

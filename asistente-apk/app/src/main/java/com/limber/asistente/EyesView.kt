@@ -37,8 +37,8 @@ fun Emotion.toExpression() = when (this) {
 }
 
 /**
- * Dos ojos animados al estilo de la pantalla de xiaozhi: parpadean solos, miran a los lados
- * y cambian de forma con la expresión.
+ * Cara animada al estilo de la pantalla de xiaozhi: dos ojos que parpadean solos, miran a los lados
+ * y cambian de forma con la expresión, y una boca que se mueve mientras suena la voz.
  */
 class EyesView(context: Context) : View(context) {
 
@@ -58,6 +58,44 @@ class EyesView(context: Context) : View(context) {
     private var lookY = 0f
     private var bounce = 0f      // para hablar / escuchar
 
+    /** true mientras suena música alegre: la cara se mece al ritmo. */
+    var dancing = false
+        set(v) { field = v; invalidate() }
+
+    /** true mientras suena la voz: la boca se abre y se cierra. */
+    var talking = false
+        set(v) {
+            if (field == v) return
+            field = v
+            if (v) { mouthLevelAt = 0L; talkMouth.start() } else { talkMouth.cancel(); mouthOpen = 0f; invalidate() }
+        }
+
+    /** Volumen real de la voz (0..1), si se puede medir; si no llega, la boca se mueve sola. */
+    fun setMouthLevel(level: Float) {
+        mouthLevel = level.coerceIn(0f, 1f); mouthLevelAt = System.currentTimeMillis()
+    }
+
+    private var mouthOpen = 0f   // 0 cerrada, 1 muy abierta
+    private var mouthLevel = 0f
+    private var mouthLevelAt = 0L
+    private var mouthTarget = 0f
+    private var nextSyllable = 0L
+    private val mouthPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val talkMouth = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 1000; repeatCount = ValueAnimator.INFINITE
+        addUpdateListener {
+            val now = System.currentTimeMillis()
+            if (now - mouthLevelAt < 300) mouthTarget = mouthLevel
+            else if (now >= nextSyllable) {
+                // Sin medición: sílabas al azar, con alguna pausa cerrada
+                mouthTarget = if (Random.nextFloat() < 0.15f) 0.05f else 0.3f + Random.nextFloat() * 0.7f
+                nextSyllable = now + 70 + Random.nextLong(110)
+            }
+            mouthOpen += (mouthTarget - mouthOpen) * 0.45f
+            invalidate()
+        }
+    }
+
     private val blinkAnim = ValueAnimator.ofFloat(0f, 1f, 0f).apply {
         duration = 180
         addUpdateListener { blink = it.animatedValue as Float; invalidate() }
@@ -74,7 +112,7 @@ class EyesView(context: Context) : View(context) {
         addUpdateListener { bounce = it.animatedValue as Float; if (isAnimated()) invalidate() }
     }
 
-    private fun isAnimated() = expression == Expression.SPEAKING || expression == Expression.LISTENING ||
+    private fun isAnimated() = dancing || expression == Expression.SPEAKING || expression == Expression.LISTENING ||
         expression == Expression.LAUGHING || expression == Expression.CRYING
 
     private fun glance(x: Float, y: Float) {
@@ -92,17 +130,18 @@ class EyesView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
-        removeCallbacks(idle); talk.cancel(); blinkAnim.cancel()
+        removeCallbacks(idle); talk.cancel(); blinkAnim.cancel(); talkMouth.cancel()
         super.onDetachedFromWindow()
     }
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
         lid.color = (background as? android.graphics.drawable.ColorDrawable)?.color ?: Color.TRANSPARENT
-        val eyeW = minOf(w * 0.28f, h * 0.55f)
-        var eyeH = h * 0.62f
+        // Ojos arriba y boca abajo
+        val eyeW = minOf(w * 0.3f, h * 0.45f)
+        var eyeH = minOf(h * 0.48f, eyeW * 1.15f)
         val gap = w * 0.12f
-        val cy = h / 2 + lookY * h * 0.08f
+        val cy = h * 0.4f + lookY * h * 0.06f
         val shift = lookX * w * 0.06f
         when (expression) {
             Expression.SURPRISED -> eyeH *= 1.15f
@@ -113,7 +152,8 @@ class EyesView(context: Context) : View(context) {
             Expression.SLEEPY -> eyeH *= 0.25f
             else -> {}
         }
-        val jump = if (expression == Expression.LAUGHING) -bounce * h * 0.05f else 0f
+        val jump = (if (expression == Expression.LAUGHING) -bounce * h * 0.05f else 0f) +
+            (if (dancing) (bounce - 0.5f) * h * 0.06f else 0f)
         val left = w / 2 - gap / 2 - eyeW + shift
         val right = w / 2 + gap / 2 + shift
         drawEye(c, left, cy + jump, eyeW, eyeH, isLeft = true)
@@ -132,8 +172,61 @@ class EyesView(context: Context) : View(context) {
                 c.drawOval(RectF(left - eyeW * 0.1f, cy + eyeH * 0.42f, left + eyeW * 0.55f, cy + eyeH * 0.62f), extra)
                 c.drawOval(RectF(right + eyeW * 0.45f, cy + eyeH * 0.42f, right + eyeW * 1.1f, cy + eyeH * 0.62f), extra)
             }
-            Expression.KISSY -> drawHeart(c, w / 2, cy + eyeH * 0.55f, eyeW * 0.18f)
+            Expression.KISSY -> drawHeart(c, w / 2 + eyeW * 0.6f, h * 0.78f, eyeW * 0.14f)
             else -> {}
+        }
+        drawMouth(c, w / 2 + shift, h * 0.81f + jump, eyeW)
+    }
+
+    private fun drawMouth(c: Canvas, cx: Float, cy: Float, eyeW: Float) {
+        val mw = eyeW * 0.75f
+        val sw = eyeW * 0.09f
+        mouthPaint.color = eyeColor; mouthPaint.strokeWidth = sw
+        val r = height * 0.09f
+        if (talking) {
+            // Boca abierta que sigue la voz
+            val mh = sw + mouthOpen * r * 1.6f
+            val ww = mw * (0.75f + mouthOpen * 0.25f)
+            rect.set(cx - ww / 2, cy - mh / 2, cx + ww / 2, cy + mh / 2)
+            c.drawRoundRect(rect, minOf(ww, mh) / 2, minOf(ww, mh) / 2, paint)
+            return
+        }
+        path.reset()
+        when (expression) {
+            Expression.HAPPY, Expression.CONFIDENT, Expression.RELAXED, Expression.LOVE, Expression.WINK, Expression.EMBARRASSED -> {
+                path.moveTo(cx - mw / 2, cy - r * 0.3f); path.quadTo(cx, cy + r * 0.9f, cx + mw / 2, cy - r * 0.3f)
+                c.drawPath(path, mouthPaint)
+            }
+            Expression.LAUGHING, Expression.SILLY -> {
+                // Sonrisa abierta (D acostada); la de "tonto" saca la lengua
+                val open = if (expression == Expression.LAUGHING) 0.8f + bounce * 0.4f else 1f
+                rect.set(cx - mw / 2, cy - r * 0.9f, cx + mw / 2, cy + r * 0.9f * open)
+                c.drawArc(rect, 0f, 180f, true, paint)
+                if (expression == Expression.SILLY) {
+                    val t = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#F08A9C") }
+                    c.drawCircle(cx + mw * 0.12f, cy + r * 0.75f, mw * 0.16f, t)
+                }
+            }
+            Expression.SAD, Expression.CRYING -> {
+                path.moveTo(cx - mw / 2, cy + r * 0.4f); path.quadTo(cx, cy - r * 0.7f, cx + mw / 2, cy + r * 0.4f)
+                c.drawPath(path, mouthPaint)
+            }
+            Expression.SURPRISED, Expression.SHOCKED -> {
+                val s = if (expression == Expression.SHOCKED) 1.3f else 1f
+                rect.set(cx - mw * 0.22f * s, cy - r * 0.7f * s, cx + mw * 0.22f * s, cy + r * 0.7f * s)
+                c.drawOval(rect, paint)
+            }
+            Expression.KISSY, Expression.SLEEPY -> c.drawCircle(cx, cy, mw * 0.11f, paint)
+            Expression.ANGRY -> {
+                path.moveTo(cx - mw / 2, cy + r * 0.2f); path.quadTo(cx, cy - r * 0.25f, cx + mw / 2, cy + r * 0.2f)
+                c.drawPath(path, mouthPaint)
+            }
+            Expression.CONFUSED, Expression.THINKING -> {
+                // Boca chueca, hacia un lado
+                path.moveTo(cx - mw * 0.35f, cy + r * 0.15f); path.lineTo(cx + mw * 0.3f, cy - r * 0.2f)
+                c.drawPath(path, mouthPaint)
+            }
+            else -> c.drawLine(cx - mw * 0.35f, cy, cx + mw * 0.35f, cy, mouthPaint)
         }
     }
 

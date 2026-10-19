@@ -14,7 +14,11 @@ android {
         versionCode = 7
         versionName = "6.0"
         ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release") } }
     }
+    // Modelo local (llama.cpp) para cuando las APIs gratis se limitan
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    ndkVersion = "27.2.12479018"
 
     buildTypes {
         release {

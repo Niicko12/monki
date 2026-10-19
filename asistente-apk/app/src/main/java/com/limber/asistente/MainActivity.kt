@@ -28,6 +28,10 @@ class MainActivity : Activity() {
         // Configuración por adb: am start -n com.limber.asistente/.MainActivity --es key ... --es model ...
         intent.getStringExtra("key")?.let { prefs.apiKey = it }
         intent.getStringExtra("model")?.let { prefs.model = it }
+        intent.getStringExtra("groq_key")?.let { prefs.groqKey = it }
+        intent.getStringExtra("pronunciar")?.let { prefs.pronunciations = it.replace("\\n", "\n") }
+        intent.getStringExtra("nvidia_key")?.let { prefs.nvidiaKey = it }
+        intent.getStringExtra("openrouter_key")?.let { prefs.openRouterKey = it }
         intent.getStringExtra("tts_model")?.let { prefs.ttsModel = it }
         intent.getStringExtra("wake_word")?.let { prefs.wakeWord = it }
         intent.getStringExtra("persona")?.let { prefs.persona = it }
@@ -35,6 +39,12 @@ class MainActivity : Activity() {
         intent.getStringExtra("user_name")?.let { prefs.userName = it }
         // Prueba de voz por adb: am start -n com.limber.asistente/.MainActivity --es decir "hola"
         intent.getStringExtra("decir")?.let { AgentService.instance?.announce(it) }
+        // Prueba de los respaldos por adb: --ez sin_gemini true --es pedir "¿qué hora es?"
+        if (intent.getBooleanExtra("sin_gemini", false)) Agent.skipGemini()
+        // Prueba del modelo local por adb: --ez solo_local true (salta Gemini y los respaldos en la nube)
+        if (intent.getBooleanExtra("solo_local", false)) { Agent.skipGemini(); Agent.onlyLocal = true }
+        intent.getStringExtra("pedir")?.let { AgentService.instance?.askText(it) }
+        intent.getStringExtra("color")?.let { if (FaceColors.isValid(it)) { prefs.faceColor = it; AgentService.instance?.refreshFace() } }
         intent.getStringExtra("name")?.let { prefs.assistantName = it }
         intent.getStringExtra("wol")?.let { prefs.wolDevices = it }
         intent.getStringExtra("mcp_servers")?.let { prefs.mcpServers = it; AgentService.instance?.reloadRemoteServers() }
@@ -88,9 +98,9 @@ class MainActivity : Activity() {
         col.addView(text("Voz (Charon, Orus, Iapetus, Algenib, Kore, Puck…)", 13f, "#9AA6A1"))
         val voiceName = field(prefs.voiceName, "Charon")
         col.addView(voiceName)
-        col.addView(text("Estilo de la voz", 13f, "#9AA6A1"))
-        val voiceStyle = field(prefs.voiceStyle, Prefs.DEFAULT_VOICE_STYLE).apply { setSingleLine(false); maxLines = 3 }
-        col.addView(voiceStyle)
+        col.addView(text("Color de la cara (${FaceColors.names.keys.joinToString()}, #RRGGBB o \"ánimo\")", 13f, "#9AA6A1"))
+        val faceColor = field(prefs.faceColor, "verde")
+        col.addView(faceColor)
         val voice = CheckBox(this).apply { text = "Responder en voz alta"; isChecked = prefs.voiceEnabled; setTextColor(Color.WHITE) }
         val bubble = CheckBox(this).apply { text = "Mostrar burbuja flotante"; isChecked = prefs.bubbleEnabled; setTextColor(Color.WHITE) }
         col.addView(voice); col.addView(bubble)
@@ -115,9 +125,12 @@ class MainActivity : Activity() {
             prefs.mcpServerEnabled = mcpOn.isChecked; prefs.mcpServers = servers.text.toString()
             prefs.wolDevices = wol.text.toString()
             prefs.alexaMode = alexa.isChecked; prefs.wakeWord = wakeWord.text.toString()
-            prefs.voiceName = voiceName.text.toString(); prefs.voiceStyle = voiceStyle.text.toString()
+            prefs.voiceName = voiceName.text.toString()
+            if (FaceColors.isValid(faceColor.text.toString())) prefs.faceColor = faceColor.text.toString()
+            else faceColor.setText(prefs.faceColor)
             AgentService.instance?.let {
                 if (bubble.isChecked) it.showBubble() else it.hideBubble()
+                it.refreshFace()
                 it.setMcpServerEnabled(mcpOn.isChecked)
                 serversStatus.text = "Conectando…"
                 it.reloadRemoteServers { s -> serversStatus.text = s }

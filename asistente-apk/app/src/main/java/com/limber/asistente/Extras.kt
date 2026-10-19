@@ -53,6 +53,9 @@ class Alarms(context: Context, private val scope: CoroutineScope, private val on
         return "Listo: \"$text\" $cuando (número ${item.id})."
     }
 
+    /** La siguiente alarma, para el widget: hora y texto. */
+    fun next(): Pair<String, String>? = load().minByOrNull { it.at }?.let { fmt.format(Date(it.at)) to it.text.removePrefix("Temporizador: ") }
+
     fun list(): String = load().sortedBy { it.at }.joinToString("\n") { "${it.id}. ${it.text} — ${fmt.format(Date(it.at))}" }
         .ifEmpty { "No hay alarmas ni recordatorios." }
 

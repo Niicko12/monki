@@ -81,6 +81,56 @@ function secuencia(dispositivo, comando, valor) {
   });
 }
 
+/** Lo que suena en un Echo (título, artista, portada…) o null si no hay nada.
+ *  Usa la API nueva de sesiones: la vieja (getPlayerInfo) devuelve vacío con Spotify. */
+function infoDe(d) {
+  return new Promise((ok) => {
+    const tipo = alexa.serialNumbers[d.serie] && alexa.serialNumbers[d.serie].deviceType;
+    alexa.httpsGet(`/api/np/list-media-sessions?deviceSerialNumber=${d.serie}&deviceType=${tipo}`, (err, r) => {
+      const s = !err && r && (r.mediaSessionList || []).find((x) => x.nowPlayingData && x.nowPlayingData.infoText);
+      if (!s) return ok(null);
+      const p = s.nowPlayingData;
+      const art = p.mainArt || {};
+      ok({
+        dispositivo: d.nombre,
+        estado: p.playerState === 'PLAYING' ? 'sonando' : p.playerState === 'PAUSED' ? 'pausa' : String(p.playerState || '').toLowerCase(),
+        titulo: p.infoText.title || '',
+        artista: p.infoText.subText1 || '',
+        album: p.infoText.subText2 || '',
+        portada: art.mediumUrl || art.smallUrl || art.fullUrl || '',
+        app: (p.provider && p.provider.providerName) || '',
+        progreso: (p.progress && p.progress.mediaProgress) || 0,
+        duracion: (p.progress && p.progress.mediaLength) || 0,
+      });
+    });
+  });
+}
+
+/** El Echo pedido o, si no dice, el primero que esté sonando (empezando por el principal). */
+async function reproduciendo(nombre) {
+  if (nombre) return infoDe(elegir(nombre));
+  const todos = dispositivos().filter((x) => x.en_linea);
+  todos.sort((a, b) => (b.nombre === PRINCIPAL) - (a.nombre === PRINCIPAL));
+  let pausado = null;
+  for (const d of todos) {
+    const i = await infoDe(d);
+    if (i && i.estado === 'sonando') return i;
+    if (i && !pausado) pausado = i;
+  }
+  return pausado;
+}
+
+/** play, pausa, siguiente, anterior o volumen (0-100) en el Echo que está sonando (o el pedido).
+ *  Se mandan como orden de texto al Echo: /api/np/command no controla las sesiones de Spotify. */
+async function controlar(accion, nombre, valor) {
+  const texto = { play: 'continúa la música', pausa: 'pausa', siguiente: 'siguiente canción', anterior: 'canción anterior' }[accion];
+  if (!texto && accion !== 'volumen') throw new Error('Acción no válida: play, pausa, siguiente, anterior o volumen.');
+  const actual = nombre ? null : await reproduciendo();
+  const destino = actual ? actual.dispositivo : nombre;
+  if (accion === 'volumen') return secuencia(destino, 'volume', Math.max(0, Math.min(100, valor | 0)));
+  return secuencia(destino, 'textCommand', texto);
+}
+
 function responder(res, codigo, cuerpo) {
   res.writeHead(codigo, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(cuerpo));
@@ -96,6 +146,8 @@ http.createServer((req, res) => {
     try {
       if (req.url === '/dispositivos') return responder(res, 200, dispositivos());
       if (req.url === '/comando') return responder(res, 200, { dispositivo: await secuencia(datos.dispositivo, 'textCommand', datos.texto) });
+      if (req.url === '/reproduciendo') return responder(res, 200, (await reproduciendo(datos.dispositivo)) || { estado: 'nada' });
+      if (req.url === '/control') return responder(res, 200, { dispositivo: await controlar(datos.accion, datos.dispositivo, datos.valor) });
       if (req.url === '/decir') return responder(res, 200, { dispositivo: await secuencia(datos.dispositivo, 'speak', datos.texto) });
       responder(res, 404, { error: 'ruta desconocida' });
     } catch (e) {

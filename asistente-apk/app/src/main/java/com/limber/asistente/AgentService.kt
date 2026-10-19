@@ -70,6 +70,8 @@ class AgentService : AccessibilityService(), Controls {
     }
     private var state = State.IDLE
     private var emotion = Emotion.NEUTRAL
+    private var emotionAt = 0L   // la emoción de la última respuesta se ve un rato; luego la cara vuelve al ánimo
+    private val mood by lazy { Mood(this) }
 
     private val localTools by lazy { deviceTools(this) }
     private var remoteClients: List<McpClient> = emptyList()
@@ -79,6 +81,22 @@ class AgentService : AccessibilityService(), Controls {
     private val routines by lazy { Routines(this) }
     private val alarms by lazy { Alarms(this, scope) { text -> ring(text) } }
     private lateinit var clockView: TextView
+    private lateinit var faceRow: LinearLayout
+    private lateinit var musicBar: LinearLayout
+    private lateinit var musicArt: android.widget.ImageView
+    private lateinit var musicText: TextView
+    private lateinit var musicPlay: Button
+    private var musicAt = 0L
+    /** Ánimo de la canción que suena (lo decide un modelo por título y artista); null si no hay música. */
+    private var musicMood: Animo? = null
+    private var musicKey = ""
+    private var musicArtUrl = ""
+    private lateinit var leftCol: LinearLayout
+    private lateinit var rightCol: LinearLayout
+    private var weatherText = "…"
+    private var weatherAt = 0L
+    private val pcText = mutableMapOf<String, String>()
+    private var pcAt = 0L
     private lateinit var inputRow: LinearLayout
     private var typing = false
     private var lastActivity = System.currentTimeMillis()
@@ -87,14 +105,15 @@ class AgentService : AccessibilityService(), Controls {
     private var followUp = false
 
     /** Herramientas que ve Gemini: las de la consola más las de servidores MCP conectados. */
-    fun allTools(): List<Tool> = localTools + Web.tools(prefs) + WakeOnLan.tools(prefs) + alarms.tools() + memory.tools() + routines.tools() + remoteClients.flatMap { it.asTools() }
+    fun allTools(): List<Tool> = localTools + Web.tools(prefs) + WakeOnLan.tools(prefs) + alarms.tools() + memory.tools() + routines.tools() + faceTools() + remoteClients.flatMap { it.asTools() }
 
     override fun onServiceConnected() {
         GestureService.setEnabled(this, false)   // por si quedó prendido (crash o reinicio)
+        LocalLlm.setup(this)
         scope.launch { offlineVoice.warmUp() }
         instance = this
         prefs = Prefs(this)
-        agent = Agent(prefs, this, { allTools() }, { memory.all() }, { routines.all() })
+        agent = Agent(prefs, this, { allTools() }, { memory.all() }, { routines.all() }, { currentMood() })
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         mcpServer = McpServer({ localTools }, { prefs.mcpToken })
         if (prefs.mcpServerEnabled) mcpServer.start()
@@ -114,11 +133,14 @@ class AgentService : AccessibilityService(), Controls {
             var warnedBattery = false
             while (true) {
                 updateStatusBar()
+                updateWidgets()
                 val battery = (getSystemService(BATTERY_SERVICE) as android.os.BatteryManager)
                     .getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
                 val charging = (getSystemService(BATTERY_SERVICE) as android.os.BatteryManager).isCharging
                 if (battery in 1..20 && !charging && !warnedBattery) { warnedBattery = true; say("${prefs.honorific}, me queda $battery por ciento de batería. ¿Me conecta al cargador?") }
                 if (charging || battery > 25) warnedBattery = false
+                if (!asleep && state == State.IDLE && job?.isActive != true) refreshFace()
+                if (job?.isActive != true) withContext(Dispatchers.IO) { LocalLlm.releaseIfIdle() }
                 if (!asleep && panel != null && state == State.IDLE && job?.isActive != true &&
                     System.currentTimeMillis() - lastActivity > SLEEP_AFTER_MS) sleep()
                 kotlinx.coroutines.delay(15_000)
@@ -164,6 +186,7 @@ class AgentService : AccessibilityService(), Controls {
             clients.map { c -> runCatching { c.connect(); "${c.alias}: ${c.tools.size} herramientas" }.getOrElse { "${c.alias}: ${it.message}" } }
         }
         remoteClients = clients.filter { it.tools.isNotEmpty() }
+        pcAt = 0L
         android.util.Log.i("Asistente", "Servidores MCP: " + summary.joinToString(" | "))
         onDone?.invoke(summary.joinToString("\n").ifEmpty { "Sin servidores externos." })
     }
@@ -228,6 +251,7 @@ class AgentService : AccessibilityService(), Controls {
             setBackgroundResource(R.drawable.bubble)
             setPadding(dp(4), dp(4), dp(4), dp(4))
             expression = emotion.toExpression()
+            eyeColor = faceColor()
         }
         val lp = overlayParams(size, size, false).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -263,7 +287,7 @@ class AgentService : AccessibilityService(), Controls {
             isFocusable = true; setOnClickListener { onClick() }
         }
         val bg = Color.parseColor("#0E1311")
-        faceView = EyesView(this).apply { setBackgroundColor(bg); isFocusable = false }
+        faceView = EyesView(this).apply { setBackgroundColor(bg); isFocusable = false; eyeColor = faceColor() }
         stateView = TextView(this).apply { setTextColor(Color.parseColor("#9AA6A1")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
         caption = TextView(this).apply {
             setTextColor(Color.parseColor("#E4E9E6")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -274,6 +298,29 @@ class AgentService : AccessibilityService(), Controls {
             setLineSpacing(0f, 1.15f)
         }
         logScroll = ScrollView(this).apply { addView(log); isFocusable = false; visibility = View.GONE }
+        // Reproductor: lo que suena en Alexa (Spotify) con sus botones; solo aparece si hay música
+        musicArt = android.widget.ImageView(this).apply { scaleType = android.widget.ImageView.ScaleType.CENTER_CROP }
+        musicText = TextView(this).apply { maxLines = 2; setPadding(dp(10), 0, dp(6), 0); setTextColor(Color.WHITE) }
+        musicPlay = btn("⏯") { musicControl(if (musicPlay.tag == "sonando") "pausa" else "play") }
+        musicBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.parseColor("#18201D")) }
+            addView(musicArt, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(musicText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(btn("⏮") { musicControl("anterior") })
+            addView(musicPlay)
+            addView(btn("⏭") { musicControl("siguiente") })
+        }
+        // Widgets en columnas a los lados de la cara: grandes y sin taparla
+        leftCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        rightCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        faceRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(leftCol, LinearLayout.LayoutParams(dp(WIDGET_W), -1))
+            addView(faceView, LinearLayout.LayoutParams(0, -1, 1f))
+            addView(rightCol, LinearLayout.LayoutParams(dp(WIDGET_W), -1))
+        }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             addView(stateView, LinearLayout.LayoutParams(0, -2, 1f))
@@ -286,6 +333,7 @@ class AgentService : AccessibilityService(), Controls {
                 logScroll.visibility = if (show) View.VISIBLE else View.GONE
                 faceView.visibility = if (show) View.GONE else View.VISIBLE
                 caption.visibility = faceView.visibility
+                faceRow.visibility = faceView.visibility
                 if (show) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             })
             addView(btn("Nuevo") { agent.reset(); log.text = ""; say("Conversación nueva. ¿En qué te ayudo?", speak = false) })
@@ -331,7 +379,8 @@ class AgentService : AccessibilityService(), Controls {
             setBackgroundColor(bg)
             setPadding(pad, pad, pad, pad)
             addView(header)
-            addView(faceView, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(faceRow, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(musicBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(4), dp(2), dp(4), dp(2)) })
             addView(logScroll, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(caption, LinearLayout.LayoutParams(-1, -2))
             addView(row)
@@ -351,6 +400,7 @@ class AgentService : AccessibilityService(), Controls {
         runCatching { wm.updateViewLayout(root, lp) }
         faceView.visibility = if (on) View.GONE else View.VISIBLE
         caption.visibility = faceView.visibility
+        faceRow.visibility = faceView.visibility
         logScroll.visibility = if (on) View.VISIBLE else View.GONE
         if (on) {
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
@@ -369,6 +419,7 @@ class AgentService : AccessibilityService(), Controls {
             }
             panel = buildPanel().also { wm.addView(it, lp) }
             setState(state)
+            pcAt = 0L; updateWidgets()
             if (log.text.isEmpty()) say("Hola, ¿qué hacemos? Escribe, o presiona X para hablar. B interrumpe.", speak = false)
         }
         setOverlaysVisible(true)
@@ -406,6 +457,9 @@ class AgentService : AccessibilityService(), Controls {
     /** Dice un texto en voz alta (para probar la voz desde adb). */
     fun announce(text: String) = say(text)
 
+    /** Hace un pedido escrito (para probar desde adb). */
+    fun askText(text: String) { if (panel == null) showPanel(); turnStart = System.currentTimeMillis(); run(text, null, "Tú: $text") }
+
     private fun say(text: String, speak: Boolean = true, who: String = "Asistente") {
         if (panel == null && speak) showPanel()
         if (::log.isInitialized) {
@@ -418,14 +472,33 @@ class AgentService : AccessibilityService(), Controls {
 
     private var speakJob: Job? = null
 
-    private fun speakAloud(text: String) {
+    /** Aplica las pronunciaciones de los ajustes (nombres que la voz lee mal, por ejemplo agudos por terminar en r). */
+    private fun speakable(text: String): String = prefs.pronunciations.lines().fold(
+        // Si Monki dice "Alexa" se activa el Echo de la casa
+        text.replace(Regex("\\bAlexa\\b", RegexOption.IGNORE_CASE), "la bocina")) { t, line ->
+        val (from, to) = line.split("=", limit = 2).map { it.trim() }.let { if (it.size == 2) it[0] to it[1] else return@fold t }
+        if (from.isEmpty()) t else t.replace(Regex("\\b${Regex.escape(from)}\\b", RegexOption.IGNORE_CASE), to)
+    }
+
+    private fun speakAloud(shown: String) {
+        val text = speakable(shown)
         speakJob?.cancel()
         speakJob = scope.launch {
             setState(State.SPEAKING)
-            // Tras un fallo (cuota agotada) no reintenta Gemini por un rato: va directo a la voz sin internet
+            // 1) Voz de Edge desde la computadora ("casa"): natural y rápida (~1 s)
+            val edge = withContext(Dispatchers.IO) {
+                remoteClients.firstNotNullOfOrNull { c -> runCatching { c.voice(text) }.getOrNull() }
+            }
+            if (edge != null) {
+                lap("voz de Edge")
+                playVoice(File(cacheDir, "voz.mp3").apply { writeBytes(edge) }, offline = false)
+                stopVoice(); setState(State.IDLE); afterTurn()
+                return@launch
+            }
+            // 2) Gemini. Tras un fallo (cuota agotada) no lo reintenta por un rato: va directo a la voz sin internet
             val wav = if (System.currentTimeMillis() - geminiVoiceFailedAt < GEMINI_VOICE_RETRY_MS) null
                 else withContext(Dispatchers.IO) {
-                    runCatching { Gemini(prefs.apiKey).speech(prefs.ttsModel, text, prefs.voiceName, prefs.voiceStyle) }.getOrNull()
+                    runCatching { Gemini(prefs.apiKey).speech(prefs.ttsModel, text, prefs.voiceName) }.getOrNull()
                 }.also { if (it == null) geminiVoiceFailedAt = System.currentTimeMillis() }
             lap(if (wav != null) "voz de Gemini" else "intento de voz de Gemini")
             if (wav != null) {
@@ -462,6 +535,11 @@ class AgentService : AccessibilityService(), Controls {
         for (p in text.split(Regex("(?<=[.!?…;:])\\s+")).map { it.trim() }.filter { it.isNotEmpty() }) {
             if (out.isNotEmpty() && out.last().length < 25) out[out.size - 1] = out.last() + " " + p else out += p
         }
+        // La primera parte corta (hasta la primera coma) para que la voz empiece a sonar antes
+        if (out.isNotEmpty() && out[0].length > 45) {
+            val cut = out[0].indexOf(", ").takeIf { it in 12..60 }
+            if (cut != null) { val first = out[0]; out[0] = first.substring(0, cut + 1); out.add(1, first.substring(cut + 2)) }
+        }
         return out.ifEmpty { listOf(text) }
     }
 
@@ -488,6 +566,8 @@ class AgentService : AccessibilityService(), Controls {
                 }
             }
             start()
+            wake.strict = true
+            startMouth(audioSessionId)
         }
         lap(if (offline) "voz sin internet y empieza a sonar" else "empieza a sonar")
         startWake()   // escuchar "Hey Monki" mientras habla, para poder interrumpirlo
@@ -495,6 +575,36 @@ class AgentService : AccessibilityService(), Controls {
     }
 
     private var reverb: android.media.audiofx.PresetReverb? = null
+    private var visualizer: android.media.audiofx.Visualizer? = null
+
+    /** La boca se mueve con el volumen real de la voz; si el Visualizer falla, EyesView la mueve sola. */
+    private fun startMouth(session: Int) {
+        setTalking(true)
+        runCatching {
+            visualizer?.release()
+            visualizer = android.media.audiofx.Visualizer(session).apply {
+                captureSize = android.media.audiofx.Visualizer.getCaptureSizeRange()[0]
+                setDataCaptureListener(object : android.media.audiofx.Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(v: android.media.audiofx.Visualizer?, wave: ByteArray?, rate: Int) {
+                        wave ?: return
+                        // Forma de onda en 8 bits sin signo (128 = silencio)
+                        var peak = 0
+                        for (b in wave) peak = maxOf(peak, kotlin.math.abs((b.toInt() and 0xFF) - 128))
+                        val level = ((peak - 6) / 70f).coerceIn(0f, 1f)
+                        if (::faceView.isInitialized) faceView.setMouthLevel(level)
+                        bubble?.setMouthLevel(level)
+                    }
+                    override fun onFftDataCapture(v: android.media.audiofx.Visualizer?, fft: ByteArray?, rate: Int) {}
+                }, android.media.audiofx.Visualizer.getMaxCaptureRate(), true, false)
+                enabled = true
+            }
+        }.onFailure { android.util.Log.w("Asistente", "Boca sin Visualizer: ${it.message}") }
+    }
+
+    private fun setTalking(on: Boolean) {
+        if (::faceView.isInitialized) faceView.post { faceView.talking = on }
+        bubble?.let { b -> b.post { b.talking = on } }
+    }
 
     // Tiempos de cada turno por voz, en el log ("adb logcat -s Tiempos")
     private var turnStart = 0L
@@ -517,6 +627,10 @@ class AgentService : AccessibilityService(), Controls {
     private var lastWasVoice = false
 
     private fun stopVoice() {
+        visualizer?.run { runCatching { enabled = false }; release() }
+        visualizer = null
+        setTalking(false)
+        wake.strict = false
         player?.run { runCatching { stop() }; release() }
         player = null
     }
@@ -525,7 +639,7 @@ class AgentService : AccessibilityService(), Controls {
     private fun interrupt() {
         if (recorder.isRecording) { recorder.cancel(); micButton.text = "🎙 Hablar (X)" }
         speakJob?.cancel(); stopVoice()
-        if (job?.isActive == true) { job?.cancel(); say("Ok, me detengo.", speak = false) }
+        if (job?.isActive == true) { LocalLlm.stop(); job?.cancel(); say("Ok, me detengo.", speak = false) }
         setOverlaysVisible(true)
         setState(State.IDLE)
         followUp = false
@@ -536,18 +650,61 @@ class AgentService : AccessibilityService(), Controls {
         state = s
         lastActivity = System.currentTimeMillis()
         if (asleep && s != State.IDLE) wakeUp()
-        val expr = when (s) {
-            State.IDLE -> emotion.toExpression()
+        applyFace(detail)
+    }
+
+    private fun applyFace(detail: String? = null) {
+        val animo = musicMood ?: currentMood()
+        val recent = emotion != Emotion.NEUTRAL && System.currentTimeMillis() - emotionAt < EMOTION_SHOWN_MS
+        val expr = when (state) {
+            State.IDLE -> if (recent) emotion.toExpression() else animo.expression
             State.LISTENING -> Expression.LISTENING
             State.THINKING -> Expression.THINKING
             State.SPEAKING -> if (emotion == Emotion.NEUTRAL) Expression.SPEAKING else emotion.toExpression()
         }
+        // Con música, la cara toma el color y el ánimo de la canción, y se mece si es alegre
+        val color = musicMood?.let { Color.parseColor(it.color) } ?: faceColor(animo)
+        val dance = musicMood in listOf(Animo.FELIZ, Animo.EMOCIONADO) && state == State.IDLE
         if (::faceView.isInitialized) {
             faceView.expression = expr
-            stateView.text = detail ?: s.label
+            faceView.eyeColor = color
+            faceView.dancing = dance
+            stateView.text = detail ?: if (state == State.IDLE) "${state.label} · ánimo: ${animo.tag}${if (musicMood != null) " 🎵" else ""}" else state.label
         }
-        bubble?.expression = expr
+        bubble?.let { it.expression = expr; it.eyeColor = color; it.dancing = dance }
     }
+
+    /** Vuelve a pintar la cara (color y ánimo) sin contar como actividad. */
+    fun refreshFace() {
+        drawWidgets()
+        if (asleep) { faceColor().let { c -> if (::faceView.isInitialized) faceView.eyeColor = c; bubble?.eyeColor = c }; return }
+        applyFace()
+    }
+
+    private fun currentMood(): Animo {
+        val bm = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
+        return mood.current(bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY), bm.isCharging)
+    }
+
+    private fun faceColor(animo: Animo = currentMood()) =
+        FaceColors.parse(prefs.faceColor) ?: Color.parseColor(animo.color)
+
+    /** Herramientas para que Monki cambie su cara por voz. */
+    private fun faceTools() = listOf(
+        Tool("cara.color", "Cambia el color de tu cara en la pantalla. Colores: ${FaceColors.names.keys.joinToString()}, " +
+            "un #RRGGBB, o \"ánimo\" para que cambie con tu estado de ánimo.",
+            schema("color" to prop("string", "nombre, #RRGGBB o ánimo"), required = listOf("color"))) {
+            val c = it.optString("color")
+            if (!FaceColors.isValid(c)) ToolResult("Color no válido.")
+            else { prefs.faceColor = c; withContext(Dispatchers.Main) { refreshFace() }; ToolResult("Listo, cara en $c.") }
+        },
+        Tool("cara.animo", "Cambia tu estado de ánimo: ${Animo.entries.joinToString { it.tag }}.",
+            schema("animo" to prop("string", Animo.entries.joinToString(" | ") { it.tag }), required = listOf("animo"))) {
+            val a = Animo.entries.firstOrNull { a -> a.tag.equals(it.optString("animo").trim(), true) }
+            if (a == null) ToolResult("Ánimo no válido.")
+            else { mood.set(a); withContext(Dispatchers.Main) { refreshFace() }; ToolResult("Ahora estás ${currentMood().tag}.") }
+        },
+    )
 
     // ---------- pedidos ----------
 
@@ -596,8 +753,10 @@ class AgentService : AccessibilityService(), Controls {
         scope.launch {
             setState(State.THINKING, "Entendiendo…")
             val text = withContext(Dispatchers.IO) {
-                runCatching { Gemini(prefs.apiKey).transcribe(listOf(prefs.model) + Agent.FALLBACK_MODELS, wav) }
-                    .getOrElse { say("Tuve un problema: ${it.message}", speak = false); null }
+                // Whisper de Groq primero (gratis y no gasta la cuota de Gemini); Gemini de respaldo
+                OpenAiCompat.groq(prefs)?.let { g -> runCatching { g.transcribe(wav) }.onFailure { android.util.Log.w("Asistente", "Whisper: ${it.message}") }.getOrNull() }
+                    ?: runCatching { Gemini(prefs.apiKey).transcribe(listOf(prefs.model) + Agent.FALLBACK_MODELS, wav) }
+                        .getOrElse { withContext(Dispatchers.Main) { say("Tuve un problema: ${it.message}", speak = false) }; null }
             }
             lap("transcripción (${wav.size / 32_000} s de audio)")
             setState(State.IDLE)
@@ -622,7 +781,7 @@ class AgentService : AccessibilityService(), Controls {
     }
 
     private fun run(text: String?, wav: ByteArray?, echo: String) {
-        if (prefs.apiKey.isBlank()) { say("Falta la API Key de Gemini. Ponla en la app Asistente.", speak = false); return }
+        if (prefs.apiKey.isBlank() && prefs.groqKey.isBlank()) { say("Falta la API Key de Gemini. Ponla en la app Asistente.", speak = false); return }
         if (job?.isActive == true) return
         lastActivity = System.currentTimeMillis()
         log.append("\n\n$echo")
@@ -633,6 +792,7 @@ class AgentService : AccessibilityService(), Controls {
                 agent.ask(text, wav) { status ->
                     if (status == "pensando") setState(State.THINKING)
                     else {
+                        if (status.contains("alexa_")) scope.launch { kotlinx.coroutines.delay(4000); refreshMusic(); kotlinx.coroutines.delay(5000); refreshMusic() }
                         setState(State.THINKING, "Usando $status")
                         if (status.startsWith("self.screen") || status.startsWith("self.system") || status.startsWith("self.app"))
                             setOverlaysVisible(false)
@@ -643,8 +803,10 @@ class AgentService : AccessibilityService(), Controls {
             } catch (e: Exception) {
                 Reply("Tuve un problema: ${e.message}", Emotion.TRISTE)
             }
-            lap("respuesta de Gemini (${reply.text.length} letras)")
+            lap("respuesta (${reply.text.length} letras)")
             emotion = reply.emotion
+            emotionAt = System.currentTimeMillis()
+            mood.onReply(reply.emotion)
             if (panel == null) showPanel() else setOverlaysVisible(true)
             setState(State.IDLE)
             say(reply.text)
@@ -807,6 +969,148 @@ class AgentService : AccessibilityService(), Controls {
         clockView.text = "$hora  ·  ${if (online) "Wi-Fi" else "sin internet"}$pcs  ·  ${if (bm.isCharging) "⚡" else ""}$bat%"
     }
 
+    /**
+     * Widgets bajo la cara: hora y fecha, clima de la casa, próxima alarma y cada computadora conectada
+     * (con pc_info del hub "casa"). El clima se pide cada 20 min y las computadoras cada minuto.
+     */
+    private fun updateWidgets() {
+        if (!::faceRow.isInitialized || panel == null) return
+        val now = System.currentTimeMillis()
+        if (now - weatherAt > 20 * 60_000 && prefs.location.isNotBlank()) {
+            weatherAt = now
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { Web.weatherShort(prefs.location) }.getOrNull() }
+                    ?.takeIf { it.isNotBlank() && it.length < 30 && !it.contains("<") }?.let { weatherText = it; drawWidgets() }
+            }
+        }
+        if (now - musicAt > 10_000) { musicAt = now; refreshMusic() }
+        if (now - pcAt > 60_000) {
+            pcAt = now
+            scope.launch {
+                val clients = remoteClients.filter { c -> c.tools.any { it.optString("name") == "pc_info" } }
+                pcText.keys.retainAll(clients.map { it.alias }.toSet())
+                for (c in clients) {
+                    pcText[c.alias] = withContext(Dispatchers.IO) {
+                        runCatching { c.call("pc_info", org.json.JSONObject().put("corto", true)).text }.getOrDefault("sin conexión")
+                    }
+                }
+                drawWidgets()
+            }
+        }
+        drawWidgets()
+    }
+
+    /** El hub que tiene Alexa (alexa_reproduciendo), si hay. */
+    private fun musicClient() = remoteClients.firstOrNull { c -> c.tools.any { it.optString("name") == "alexa_reproduciendo" } }
+
+    private fun refreshMusic() {
+        val c = musicClient() ?: return
+        scope.launch {
+            val info = withContext(Dispatchers.IO) {
+                runCatching { org.json.JSONObject(c.call("alexa_reproduciendo", org.json.JSONObject()).text) }.getOrNull()
+            }
+            if (!::musicBar.isInitialized) return@launch
+            val estado = info?.optString("estado").orEmpty()
+            if (info == null || estado == "nada" || info.optString("titulo").isBlank()) {
+                musicBar.visibility = View.GONE
+                if (musicMood != null) { musicMood = null; musicKey = ""; refreshFace() }
+                return@launch
+            }
+            updateMusicMood(info)
+            musicBar.visibility = View.VISIBLE
+            musicPlay.tag = estado
+            musicPlay.text = if (estado == "sonando") "⏸" else "▶"
+            val title = info.optString("titulo"); val sub = listOf(info.optString("artista"), info.optString("dispositivo")).filter { it.isNotBlank() }.joinToString(" · ")
+            val t = android.text.SpannableString("$title\n$sub")
+            t.setSpan(android.text.style.ForegroundColorSpan(faceColor()), 0, title.length, 0)
+            t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
+            t.setSpan(android.text.style.AbsoluteSizeSpan(15, true), 0, title.length, 0)
+            t.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#B5C0BB")), title.length + 1, t.length, 0)
+            t.setSpan(android.text.style.AbsoluteSizeSpan(12, true), title.length + 1, t.length, 0)
+            musicText.text = t
+            val url = info.optString("portada")
+            if (url.isNotBlank() && url != musicArtUrl) {
+                musicArtUrl = url
+                withContext(Dispatchers.IO) {
+                    runCatching { java.net.URL(url).openStream().use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
+                }?.let { musicArt.setImageBitmap(it) }
+            }
+        }
+    }
+
+    /** Al cambiar de canción, pregunta (a Groq, rápido y gratis) qué ánimo tiene; en pausa la cara vuelve a lo suyo. */
+    private fun updateMusicMood(info: org.json.JSONObject) {
+        if (info.optString("estado") != "sonando") {
+            if (musicMood != null) { musicMood = null; refreshFace() }
+            musicKey = ""
+            return
+        }
+        val key = info.optString("titulo") + "|" + info.optString("artista")
+        if (key == musicKey) return
+        musicKey = key
+        val g = OpenAiCompat.groq(prefs) ?: return
+        scope.launch {
+            val opciones = "emocionado, feliz, tranquilo, triste, molesto"
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    g.quick("Canción: \"${info.optString("titulo")}\" de ${info.optString("artista")} (álbum o lista: ${info.optString("album")}). " +
+                        "¿Qué ánimo transmite? Responde solo una palabra de: $opciones. " +
+                        "(fiesta o bailable = emocionado; alegre = feliz; relajante, lofi o instrumental suave = tranquilo; " +
+                        "balada triste o desamor = triste; rock pesado, metal o enojo = molesto)")
+                }.getOrNull()
+            }
+            if (musicKey != key) return@launch
+            musicMood = Animo.entries.firstOrNull { r?.lowercase()?.contains(it.tag) == true } ?: Animo.TRANQUILO
+            android.util.Log.i("Asistente", "Ánimo de la canción \"${info.optString("titulo")}\": ${musicMood?.tag} ($r)")
+            refreshFace()
+        }
+    }
+
+    private fun musicControl(accion: String) {
+        val c = musicClient() ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { c.call("alexa_control", org.json.JSONObject().put("accion", accion)) } }
+            kotlinx.coroutines.delay(1500); refreshMusic()
+        }
+    }
+
+    private fun drawWidgets() {
+        if (!::faceRow.isInitialized) return
+        val loc = java.util.Locale("es")
+        val next = alarms.next()
+        val left = listOf(
+            java.text.SimpleDateFormat("HH:mm", loc).format(java.util.Date()) to java.text.SimpleDateFormat("EEE d MMM", loc).format(java.util.Date()),
+            (if (prefs.location.isBlank()) "☁ —" else weatherText) to prefs.location.ifBlank { "sin ubicación" }.substringBefore(","),
+        )
+        val right = mutableListOf((next?.let { "⏰ ${it.first}" } ?: "⏰ —") to (next?.second?.take(16) ?: "sin alarmas"))
+        pcText.forEach { (alias, t) -> right += "💻 $alias" to t.replace(" · ", "\n") }
+        val accent = faceColor()
+        fillColumn(leftCol, left, accent)
+        fillColumn(rightCol, right, accent)
+    }
+
+    /** Una tarjeta por dato, repartidas a lo alto de la columna. */
+    private fun fillColumn(col: LinearLayout, cards: List<Pair<String, String>>, accent: Int) {
+        if (col.childCount != cards.size) {
+            col.removeAllViews()
+            repeat(cards.size) {
+                col.addView(TextView(this).apply {
+                    gravity = Gravity.CENTER; setPadding(dp(6), dp(4), dp(6), dp(4))
+                    background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.parseColor("#18201D")) }
+                }, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+            }
+        }
+        cards.forEachIndexed { i, (big, small) ->
+            val text = android.text.SpannableString("$big\n$small")
+            text.setSpan(android.text.style.ForegroundColorSpan(accent), 0, big.length, 0)
+            text.setSpan(android.text.style.AbsoluteSizeSpan(if (cards.size > 2) 18 else 24, true), 0, big.length, 0)
+            text.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, big.length, 0)
+            text.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#B5C0BB")), big.length + 1, text.length, 0)
+            text.setSpan(android.text.style.AbsoluteSizeSpan(13, true), big.length + 1, text.length, 0)
+            (col.getChildAt(i) as TextView).text = text
+        }
+    }
+
     /** Reposo como xiaozhi: ojos dormidos y pantalla tenue; sigue escuchando "Hey Monki". */
     private fun sleep() {
         asleep = true
@@ -836,6 +1140,7 @@ class AgentService : AccessibilityService(), Controls {
         wakeUp()
         if (panel == null) showPanel()
         emotion = Emotion.SORPRESA
+        emotionAt = System.currentTimeMillis()
         setState(State.IDLE, "⏰ $text")
         ringing?.cancel()
         ringing = scope.launch {
@@ -857,6 +1162,8 @@ class AgentService : AccessibilityService(), Controls {
     companion object {
         private const val RATE_BYTES_1S = 16_000 * 2 + 44
         private const val SLEEP_AFTER_MS = 5 * 60_000L
+        private const val EMOTION_SHOWN_MS = 30_000L
+        private const val WIDGET_W = 140
         /** Cuánto sigue prendido el servicio de toques tras el último toque (varios toques seguidos no lo reinician). */
         private const val GESTURE_OFF_MS = 8_000L
         private const val GEMINI_VOICE_RETRY_MS = 30 * 60_000L
