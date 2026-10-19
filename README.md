@@ -7,6 +7,10 @@ Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monk
 
 > **Estado:** en desarrollo activo. Se usa a diario en una consola real; lo que falta está en [Pendientes](docs/pendientes.md).
 
+<p align="center">
+  <img src="docs/imagenes/monki-hablando.png" width="640" alt="Monki hablando en la pantalla de la consola: ojos, boca abierta, widgets de hora, clima, alarma y computadora">
+</p>
+
 ---
 
 ## Lo que hace
@@ -29,10 +33,19 @@ Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monk
 - **Color configurable** por voz ("ponte azul"), en ajustes, o *según su ánimo*.
 - **Ánimo según la música:** cuando cambia la canción, decide si es bailable, alegre, tranquila, triste o pesada; la cara toma ese ánimo y su color, y se mece si la canción es alegre.
 
+<p align="center">
+  <img src="docs/imagenes/monki-animos.png" alt="Seis ánimos de Monki con su color: feliz, emocionado, triste, molesto, cansado y aburrido">
+  <br><sub>Feliz, emocionado, triste, molesto, cansado y aburrido, con el color "según su ánimo".</sub>
+</p>
+
 ### La pantalla
 
 - **Widgets** a los lados de la cara: hora y fecha, clima, próxima alarma y cada computadora conectada (batería, CPU, RAM).
 - **Reproductor:** si suena algo en un Echo, aparece una barra con portada, canción, artista y botones ⏮ ⏯ ⏭.
+
+<p align="center">
+  <img src="docs/imagenes/monki-reproductor.png" width="620" alt="Barra del reproductor con la portada, la canción y los botones anterior, pausa y siguiente">
+</p>
 
 ---
 

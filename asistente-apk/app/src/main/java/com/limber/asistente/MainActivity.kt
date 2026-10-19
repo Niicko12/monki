@@ -44,6 +44,7 @@ class MainActivity : Activity() {
         // Prueba del modelo local por adb: --ez solo_local true (salta Gemini y los respaldos en la nube)
         if (intent.getBooleanExtra("solo_local", false)) { Agent.skipGemini(); Agent.onlyLocal = true }
         intent.getStringExtra("pedir")?.let { AgentService.instance?.askText(it) }
+        intent.getStringExtra("animo")?.let { AgentService.instance?.setMood(it) }
         intent.getStringExtra("color")?.let { if (FaceColors.isValid(it)) { prefs.faceColor = it; AgentService.instance?.refreshFace() } }
         intent.getStringExtra("name")?.let { prefs.assistantName = it }
         intent.getStringExtra("wol")?.let { prefs.wolDevices = it }

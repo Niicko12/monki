@@ -674,6 +674,11 @@ class AgentService : AccessibilityService(), Controls {
         bubble?.let { it.expression = expr; it.eyeColor = color; it.dancing = dance }
     }
 
+    /** Fija el ánimo a mano (por adb: --es animo feliz). */
+    fun setMood(tag: String) {
+        Animo.entries.firstOrNull { it.tag.equals(tag.trim(), true) }?.let { mood.set(it); emotion = Emotion.NEUTRAL; refreshFace() }
+    }
+
     /** Vuelve a pintar la cara (color y ánimo) sin contar como actividad. */
     fun refreshFace() {
         drawWidgets()

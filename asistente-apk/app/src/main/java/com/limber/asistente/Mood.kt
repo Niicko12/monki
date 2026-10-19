@@ -83,6 +83,10 @@ class Mood(context: Context) {
     }
 
     fun current(battery: Int, charging: Boolean): Animo {
+        // Un ánimo pedido a mano se respeta un rato, aunque las reglas digan otra cosa
+        if (System.currentTimeMillis() < sp.getLong("forzado_hasta", 0)) {
+            Animo.entries.firstOrNull { it.tag == sp.getString("forzado", "") }?.let { return it }
+        }
         decay()
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val idleMin = (System.currentTimeMillis() - lastInteraction) / 60_000
@@ -99,6 +103,7 @@ class Mood(context: Context) {
 
     /** Cambia el ánimo a mano (por voz: "anímate", "ponte triste"…). */
     fun set(a: Animo) {
+        sp.edit().putString("forzado", a.tag).putLong("forzado_hasta", System.currentTimeMillis() + FORCED_MS).apply()
         updatedAt = System.currentTimeMillis()
         lastInteraction = updatedAt
         when (a) {
@@ -108,5 +113,10 @@ class Mood(context: Context) {
             Animo.TRISTE -> { happy = -5f; annoyed = 0f }
             Animo.MOLESTO -> annoyed = 5f
         }
+    }
+
+    private companion object {
+        /** Cuánto dura un ánimo pedido a mano. */
+        const val FORCED_MS = 30 * 60_000L
     }
 }

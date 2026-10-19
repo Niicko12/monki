@@ -26,6 +26,7 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es <aj
 | `mcp_servers` | Servidores MCP, uno por línea: `alias\|url\|clave` | vacío |
 | `wol` | Equipos para Wake-on-LAN, uno por línea: `nombre\|MAC\|IP` | vacío |
 | `color` | Color de la cara: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco, `#RRGGBB` o `ánimo` | `verde` |
+| `animo` | Fija el ánimo 30 min: emocionado, feliz, tranquilo, aburrido, cansado, triste o molesto | (no se guarda) |
 | `pronunciar` | Palabras que la voz lee mal, una por línea (`\n`): `Oscar=Óscar` | vacío |
 | `decir` | Prueba de voz: dice ese texto | (no se guarda) |
 | `pedir` | Prueba: hace ese pedido escrito | (no se guarda) |
