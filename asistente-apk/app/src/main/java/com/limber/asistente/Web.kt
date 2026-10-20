@@ -51,6 +51,15 @@ object Web {
         return "Ahora: $now" + if (days.isNotBlank() && days.length < 300) "\nPronóstico: $days" else ""
     }
 
+    /** Busca en YouTube: lista de (id del video, título), en el orden de la página de resultados. */
+    fun youtubeSearch(query: String): List<Pair<String, String>> {
+        // Con user agent de celular YouTube manda la versión móvil con los datos escapados; la de escritorio es legible
+        val html = get("https://www.youtube.com/results?search_query=" + URLEncoder.encode(query, "UTF-8") + "&hl=es", max = 2_000_000,
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36")
+        val re = Regex("\"videoRenderer\":\\{\"videoId\":\"([\\w-]{11})\".*?\"title\":\\{\"runs\":\\[\\{\"text\":\"(.*?)\"\\}", RegexOption.DOT_MATCHES_ALL)
+        return re.findAll(html).take(8).map { it.groupValues[1] to it.groupValues[2].replace("\\u0026", "&").replace("\\\"", "\"") }.toList()
+    }
+
     /** Clima corto para el widget, por ejemplo "⛅ +23°C". */
     fun weatherShort(home: String): String {
         val q = URLEncoder.encode(home, "UTF-8").replace("+", "%20")

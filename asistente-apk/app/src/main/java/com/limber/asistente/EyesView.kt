@@ -43,12 +43,49 @@ fun Emotion.toExpression() = when (this) {
 class EyesView(context: Context) : View(context) {
 
     var expression = Expression.NEUTRAL
-        set(v) { field = v; invalidate() }
+        set(v) {
+            if (field != v) { pop.start(); if (v != Expression.SLEEPY) blinkAnim.start() }   // cambio con rebote y parpadeo
+            field = v; invalidate()
+        }
 
+    /** El color cambia con un desvanecido corto en vez de saltar. */
     var eyeColor = Color.parseColor("#6CC79C")
-        set(v) { field = v; paint.color = v; invalidate() }
+        set(v) {
+            if (field == v) return
+            val from = paint.color
+            field = v
+            colorAnim?.cancel()
+            colorAnim = ValueAnimator.ofObject(android.animation.ArgbEvaluator(), from, v).apply {
+                duration = 450
+                addUpdateListener { paint.color = it.animatedValue as Int; glow.color = paint.color; invalidate() }
+                start()
+            }
+        }
+    private var colorAnim: ValueAnimator? = null
 
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = eyeColor; style = Paint.Style.FILL }
+    // Animaciones de "vida": respiración, brillo, rebote al cambiar de expresión y detalles por estado
+    private var t = 0f                     // segundos desde que se mostró
+    private var popScale = 1f
+    private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#6CC79C") }
+    private val shine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.DEFAULT_BOLD }
+    private val pop = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 380; interpolator = android.view.animation.OvershootInterpolator(2.5f)
+        addUpdateListener { popScale = 0.86f + 0.14f * (it.animatedValue as Float); invalidate() }
+    }
+    private var lastFrame = 0L
+    private val life = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 1000; repeatCount = ValueAnimator.INFINITE
+        addUpdateListener {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastFrame < 33) return@addUpdateListener   // ~30 cuadros por segundo: suave y sin gastar batería
+            lastFrame = now
+            t = now / 1000f
+            invalidate()
+        }
+    }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#6CC79C"); style = Paint.Style.FILL }
     private val lid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val rect = RectF()
     private val path = Path()
@@ -102,7 +139,11 @@ class EyesView(context: Context) : View(context) {
     }
     private val idle = object : Runnable {
         override fun run() {
-            if (expression != Expression.SLEEPY && Random.nextFloat() < 0.7f) blinkAnim.start()
+            if (expression != Expression.SLEEPY && Random.nextFloat() < 0.7f) {
+                blinkAnim.start()
+                // A veces parpadeo doble, como las personas
+                if (Random.nextFloat() < 0.2f) postDelayed({ if (!blinkAnim.isRunning) blinkAnim.start() }, 260)
+            }
             if (Random.nextFloat() < 0.4f) glance(Random.nextFloat() * 2 - 1, Random.nextFloat() * 0.6f - 0.3f)
             postDelayed(this, 1800L + Random.nextLong(2200))
         }
@@ -127,10 +168,11 @@ class EyesView(context: Context) : View(context) {
         super.onAttachedToWindow()
         postDelayed(idle, 1200)
         talk.start()
+        life.start()
     }
 
     override fun onDetachedFromWindow() {
-        removeCallbacks(idle); talk.cancel(); blinkAnim.cancel(); talkMouth.cancel()
+        removeCallbacks(idle); talk.cancel(); blinkAnim.cancel(); talkMouth.cancel(); life.cancel(); pop.cancel(); colorAnim?.cancel()
         super.onDetachedFromWindow()
     }
 
@@ -138,10 +180,12 @@ class EyesView(context: Context) : View(context) {
         val w = width.toFloat(); val h = height.toFloat()
         lid.color = (background as? android.graphics.drawable.ColorDrawable)?.color ?: Color.TRANSPARENT
         // Ojos arriba y boca abajo
-        val eyeW = minOf(w * 0.3f, h * 0.45f)
-        var eyeH = minOf(h * 0.48f, eyeW * 1.15f)
+        // Respiración: los ojos se inflan un poco y la cara flota (más lento si duerme)
+        val breath = kotlin.math.sin(t * 2f * Math.PI.toFloat() / if (expression == Expression.SLEEPY) 5f else 3.5f)
+        val eyeW = minOf(w * 0.3f, h * 0.45f) * popScale
+        var eyeH = minOf(h * 0.48f, minOf(w * 0.3f, h * 0.45f) * 1.15f) * popScale * (1f + breath * 0.025f)
         val gap = w * 0.12f
-        val cy = h * 0.4f + lookY * h * 0.06f
+        val cy = h * 0.4f + lookY * h * 0.06f + breath * h * 0.012f
         val shift = lookX * w * 0.06f
         when (expression) {
             Expression.SURPRISED -> eyeH *= 1.15f
@@ -158,6 +202,9 @@ class EyesView(context: Context) : View(context) {
         val right = w / 2 + gap / 2 + shift
         drawEye(c, left, cy + jump, eyeW, eyeH, isLeft = true)
         drawEye(c, right, cy + jump, eyeW, if (expression == Expression.SILLY) eyeH * 0.55f else eyeH, isLeft = false)
+        drawShine(c, left, cy + jump, eyeW, eyeH)
+        drawShine(c, right, cy + jump, eyeW, if (expression == Expression.SILLY) eyeH * 0.55f else eyeH)
+        drawStateDetails(c, w, h, right + eyeW, cy + jump - eyeH / 2)
         // Detalles: lágrima, sonrojo, beso
         val extra = Paint(Paint.ANTI_ALIAS_FLAG)
         when (expression) {
@@ -242,7 +289,7 @@ class EyesView(context: Context) : View(context) {
                 val cover = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = lidColor() }
                 c.drawOval(RectF(x - w * 0.25f, cy - h0 * 0.05f, x + w * 1.25f, cy + h0 * 1.1f), cover)
             }
-            Expression.LOVE -> drawHeart(c, x + w / 2, cy, w * 0.55f)
+            Expression.LOVE -> drawHeart(c, x + w / 2, cy, w * 0.55f * (1f + 0.08f * kotlin.math.sin(t * 7f).toFloat()))
             Expression.CONFUSED -> {
                 val hh = if (isLeft) h else h * 0.55f
                 rect.set(x, cy - hh / 2, x + w, cy + hh / 2); c.drawRoundRect(rect, r, r, paint)
@@ -279,6 +326,41 @@ class EyesView(context: Context) : View(context) {
                 else { lid.color = Color.parseColor("#1C2320"); c.drawPath(path, lid); lid.color = Color.TRANSPARENT }
             }
         }
+    }
+
+    /** Destello de luz arriba a la izquierda del ojo: le da brillo y vida (se mueve un poco con la mirada). */
+    private fun drawShine(c: Canvas, x: Float, cy: Float, w: Float, h0: Float) {
+        // Solo en ojos sin párpado: en triste, pensando o seguro el destello caía encima del párpado
+        val withShine = expression in listOf(Expression.NEUTRAL, Expression.LISTENING, Expression.SPEAKING, Expression.SURPRISED,
+            Expression.SHOCKED, Expression.CONFUSED)
+        if (!withShine || blink > 0.4f) return
+        val h = h0 * (1f - blink)
+        shine.alpha = 120
+        val sx = x + w * (0.26f - lookX * 0.06f); val sy = cy - h * (0.26f + lookY * 0.04f)
+        c.drawCircle(sx, sy, w * 0.085f, shine)
+        shine.alpha = 70
+        c.drawCircle(sx + w * 0.13f, sy + h * 0.06f, w * 0.04f, shine)
+    }
+
+    /** Detalles animados: puntitos al pensar, "z" al dormir. */
+    private fun drawStateDetails(c: Canvas, w: Float, h: Float, eyeRight: Float, eyeTop: Float) {
+        glow.color = paint.color
+        when (expression) {
+            Expression.THINKING -> for (i in 0..2) {
+                val phase = ((t * 1.6f - i * 0.25f) % 1f + 1f) % 1f
+                glow.alpha = (90 + 165 * kotlin.math.sin(phase * Math.PI).toFloat()).toInt()
+                c.drawCircle(eyeRight - w * 0.02f + i * w * 0.035f, eyeTop - h * 0.06f - i * h * 0.035f, w * 0.012f + i * w * 0.004f, glow)
+            }
+            Expression.SLEEPY -> for (i in 0..2) {
+                val phase = ((t * 0.35f + i / 3f) % 1f)
+                textPaint.color = paint.color
+                textPaint.alpha = (255 * (1f - phase)).toInt()
+                textPaint.textSize = h * (0.06f + 0.05f * phase)
+                c.drawText("z", eyeRight + w * 0.02f + phase * w * 0.06f, eyeTop + h * 0.1f - phase * h * 0.3f, textPaint)
+            }
+            else -> {}
+        }
+        glow.alpha = 255
     }
 
     private fun lidColor() = (background as? android.graphics.drawable.ColorDrawable)?.color ?: Color.parseColor("#1C2320")

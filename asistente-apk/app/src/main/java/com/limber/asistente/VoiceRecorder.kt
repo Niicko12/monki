@@ -18,6 +18,10 @@ class VoiceRecorder(private val onSilence: () -> Unit = {}) {
     @Volatile var heardVoice = false
         private set
 
+    /** Límite de la grabación y de la espera sin voz; en el seguimiento (tras una respuesta) son más cortos. */
+    @Volatile var maxSeconds = 30
+    @Volatile var waitSeconds = 8
+
     @SuppressLint("MissingPermission")
     fun start(): Boolean {
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -69,9 +73,9 @@ class VoiceRecorder(private val onSilence: () -> Unit = {}) {
                     if (voice > threshold) { voiceMs += ms; quietMs = 0; if (voiceMs >= MIN_VOICE_MS) heardVoice = true }
                     else { quietMs += ms; if (!heardVoice && quietMs > 400) voiceMs = 0 }  // suma trozos de voz cercanos
                     if (heardVoice && quietMs > SILENCE_MS) { onSilence(); break }
-                    if (!heardVoice && buffer.size() > RATE * 2 * 8) { onSilence(); break } // 8 s sin hablar
+                    if (!heardVoice && buffer.size() > RATE * 2 * waitSeconds) { onSilence(); break } // sin hablar
                 }
-                if (buffer.size() > RATE * 2 * 30) { onSilence(); break } // máximo 30 s
+                if (buffer.size() > RATE * 2 * maxSeconds) { onSilence(); break } // máximo
             }
         }
         return true

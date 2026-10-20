@@ -23,6 +23,36 @@ class Prefs(context: Context) {
         get() = sp.getString("openrouter_key", "") ?: ""
         set(v) = sp.edit().putString("openrouter_key", v.trim()).apply()
 
+    /** Sesión de Amazon para el puente de Alexa dentro de Monki (de herramientas/alexa-a-consola.py); solo vive en la consola. */
+    var alexaCookie: String
+        get() = sp.getString("alexa_cookie", "") ?: ""
+        set(v) = sp.edit().putString("alexa_cookie", v.trim()).apply()
+    var alexaCsrf: String
+        get() = sp.getString("alexa_csrf", "") ?: ""
+        set(v) = sp.edit().putString("alexa_csrf", v.trim()).apply()
+    var alexaRefresh: String
+        get() = sp.getString("alexa_refresh", "") ?: ""
+        set(v) = sp.edit().putString("alexa_refresh", v.trim()).apply()
+    var alexaLoginCookie: String
+        get() = sp.getString("alexa_login", "") ?: ""
+        set(v) = sp.edit().putString("alexa_login", v.trim()).apply()
+    var alexaAppName: String
+        get() = sp.getString("alexa_app", "") ?: ""
+        set(v) = sp.edit().putString("alexa_app", v.trim()).apply()
+    /** Echo que se usa cuando no se nombra ninguno. */
+    var alexaPrincipal: String
+        get() = sp.getString("alexa_principal", "") ?: ""
+        set(v) = sp.edit().putString("alexa_principal", v.trim()).apply()
+
+    /** Permiso para Spotify Connect (de herramientas/spotify-autorizar.py); solo vive en la consola. */
+    var spotifyClientId: String
+        get() = sp.getString("spotify_client_id", "") ?: ""
+        set(v) = sp.edit().putString("spotify_client_id", v.trim()).apply()
+
+    var spotifyRefresh: String
+        get() = sp.getString("spotify_refresh", "") ?: ""
+        set(v) = sp.edit().putString("spotify_refresh", v.trim()).apply()
+
     var model: String
         get() = sp.getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
         set(v) = sp.edit().putString("model", v.trim().ifEmpty { DEFAULT_MODEL }).apply()
@@ -96,10 +126,10 @@ class Prefs(context: Context) {
         get() = sp.getString("wake_word", "monkey") ?: "monkey"
         set(v) = sp.edit().putString("wake_word", v.trim().lowercase().ifEmpty { "monkey" }).apply()
 
-    /** Color de la cara: nombre (verde, azul, rosa…), #RRGGBB o "ánimo" (cambia con el estado de ánimo). */
+    /** Color de la cara: "ánimo" (por defecto: cambia con el estado de ánimo, igual que los widgets), un nombre o #RRGGBB. */
     var faceColor: String
-        get() = sp.getString("face_color", "verde") ?: "verde"
-        set(v) = sp.edit().putString("face_color", v.trim().lowercase().ifEmpty { "verde" }).apply()
+        get() = sp.getString("face_color", FaceColors.SEGUN_ANIMO) ?: FaceColors.SEGUN_ANIMO
+        set(v) = sp.edit().putString("face_color", v.trim().lowercase().ifEmpty { FaceColors.SEGUN_ANIMO }).apply()
 
     /** Voz de Gemini (Charon: grave, de mayordomo IA). */
     var voiceName: String

@@ -25,9 +25,12 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es <aj
 | `wake_word` | Palabra de activación (debe existir en el vocabulario de Vosk) | `monkey` |
 | `mcp_servers` | Servidores MCP, uno por línea: `alias\|url\|clave` | vacío |
 | `wol` | Equipos para Wake-on-LAN, uno por línea: `nombre\|MAC\|IP` | vacío |
-| `color` | Color de la cara: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco, `#RRGGBB` o `ánimo` | `verde` |
+| `color` | Color de Monki (cara, widgets y botones): `ánimo`, o fijo: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco o `#RRGGBB` | `ánimo` |
 | `animo` | Fija el ánimo 30 min: emocionado, feliz, tranquilo, aburrido, cansado, triste o molesto | (no se guarda) |
 | `pronunciar` | Palabras que la voz lee mal, una por línea (`\n`): `Oscar=Óscar` | vacío |
+| `spotify_client_id`, `spotify_refresh` | Permiso de Spotify (lo pone `herramientas/spotify-autorizar.py`) | vacío |
+| `alexa_cookie`, `alexa_csrf`, `alexa_refresh`, `alexa_principal` | Sesión de Amazon y Echo principal (lo pone `herramientas/alexa-a-consola.py`) | vacío |
+| `audio` | Salida de sonido: `consola`, `bocina` o `emparejar` | (no se guarda) |
 | `decir` | Prueba de voz: dice ese texto | (no se guarda) |
 | `pedir` | Prueba: hace ese pedido escrito | (no se guarda) |
 | `sin_gemini` (`--ez … true`) | Prueba: salta Gemini 10 minutos | (no se guarda) |

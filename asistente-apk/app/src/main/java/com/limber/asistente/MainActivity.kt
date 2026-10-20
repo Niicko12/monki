@@ -29,6 +29,14 @@ class MainActivity : Activity() {
         intent.getStringExtra("key")?.let { prefs.apiKey = it }
         intent.getStringExtra("model")?.let { prefs.model = it }
         intent.getStringExtra("groq_key")?.let { prefs.groqKey = it }
+        intent.getStringExtra("spotify_client_id")?.let { prefs.spotifyClientId = it }
+        intent.getStringExtra("alexa_cookie")?.let { prefs.alexaCookie = it }
+        intent.getStringExtra("alexa_csrf")?.let { prefs.alexaCsrf = it }
+        intent.getStringExtra("alexa_refresh")?.let { prefs.alexaRefresh = it }
+        intent.getStringExtra("alexa_login")?.let { prefs.alexaLoginCookie = it }
+        intent.getStringExtra("alexa_app")?.let { prefs.alexaAppName = it }
+        intent.getStringExtra("alexa_principal")?.let { prefs.alexaPrincipal = it }
+        intent.getStringExtra("spotify_refresh")?.let { prefs.spotifyRefresh = it }
         intent.getStringExtra("pronunciar")?.let { prefs.pronunciations = it.replace("\\n", "\n") }
         intent.getStringExtra("nvidia_key")?.let { prefs.nvidiaKey = it }
         intent.getStringExtra("openrouter_key")?.let { prefs.openRouterKey = it }
@@ -45,10 +53,16 @@ class MainActivity : Activity() {
         if (intent.getBooleanExtra("solo_local", false)) { Agent.skipGemini(); Agent.onlyLocal = true }
         intent.getStringExtra("pedir")?.let { AgentService.instance?.askText(it) }
         intent.getStringExtra("animo")?.let { AgentService.instance?.setMood(it) }
+        // Por adb: --es audio emparejar | bocina | consola
+        intent.getStringExtra("audio")?.let { AgentService.instance?.audioCommand(it) }
         intent.getStringExtra("color")?.let { if (FaceColors.isValid(it)) { prefs.faceColor = it; AgentService.instance?.refreshFace() } }
         intent.getStringExtra("name")?.let { prefs.assistantName = it }
         intent.getStringExtra("wol")?.let { prefs.wolDevices = it }
         intent.getStringExtra("mcp_servers")?.let { prefs.mcpServers = it; AgentService.instance?.reloadRemoteServers() }
+        // Órdenes de prueba por adb: no deja abierta esta pantalla (taparía lo que Monki tiene que ver o tocar)
+        if (listOf("decir", "pedir", "audio", "animo", "color").any { intent.hasExtra(it) } && AgentService.instance != null) {
+            finish(); return
+        }
         setContentView(build())
     }
 

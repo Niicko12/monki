@@ -6,6 +6,8 @@ la Mac, teles/Chromecast y celulares Android.
 
 Uso:  uv run casa.py            (escucha en 0.0.0.0:8800/mcp, pide la clave de .env)
 """
+import functools
+import inspect
 import io
 import os
 import secrets
@@ -15,6 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import anyio
 import pychromecast
 import uvicorn
 from mcp.server.fastmcp import FastMCP, Image
@@ -47,6 +50,32 @@ mcp = FastMCP(
     host="0.0.0.0", port=PUERTO, stateless_http=True, json_response=True,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+
+# Las herramientas son funciones normales (bloqueantes). FastMCP las corre en el mismo hilo que atiende las
+# peticiones: una que se atore (red, adb, Chromecast…) dejaba a casa sin responder a nada. Cada herramienta
+# corre en un hilo aparte.
+_registrar_herramienta = mcp.tool
+
+
+def _herramienta_en_hilo(*args, **kwargs):
+    registrar = _registrar_herramienta(*args, **kwargs)
+
+    def envolver(fn):
+        if inspect.iscoroutinefunction(fn):
+            return registrar(fn)
+
+        @functools.wraps(fn)
+        async def en_hilo(*a, **k):
+            return await anyio.to_thread.run_sync(functools.partial(fn, *a, **k))
+
+        registrar(en_hilo)
+        return fn
+
+    return envolver
+
+
+mcp.tool = _herramienta_en_hilo
 
 
 def sh(*cmd, timeout=20) -> str:
@@ -757,9 +786,10 @@ async def portada(request):
     u = urlparse(url)
     if u.scheme != "https" or u.hostname not in PORTADAS_PERMITIDAS:
         return JSONResponse({"error": "host no permitido"}, status_code=400)
-    with urllib.request.urlopen(url, timeout=10) as r:
-        datos = r.read(2_000_000)
-        tipo = r.headers.get("Content-Type", "image/jpeg")
+    def bajar():
+        with urllib.request.urlopen(url, timeout=10) as r:
+            return r.read(2_000_000), r.headers.get("Content-Type", "image/jpeg")
+    datos, tipo = await anyio.to_thread.run_sync(bajar)   # sin bloquear al resto de casa
     return Response(datos, media_type=tipo)
 
 

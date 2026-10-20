@@ -35,6 +35,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.withPermit
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.coroutines.resume
@@ -99,9 +102,16 @@ class AgentService : AccessibilityService(), Controls {
     private var musicPosAt = 0L
     private var musicPlaying = false
     private var musicTicker: Job? = null
+    private var musicPausedSince = 0L
+    private var musicSource = ""         // "spotify" si el estado viene de la API de Spotify; si no, del puente de Alexa
+    private var musicDeviceType = ""     // tipo de equipo donde suena (Smartphone = la consola)   // con Spotify en pausa más de 1 min el reproductor se oculta
+    private lateinit var audioButton: Button
+    @Volatile private var audioSwitching = false
     private var musicAt = 0L
     /** Ánimo de la canción que suena (lo decide un modelo por título y artista); null si no hay música. */
     private var musicMood: Animo? = null
+    /** Ánimo del video de YouTube abierto (manda sobre el de la música mientras el video está en pantalla). */
+    private var videoMood: Animo? = null
     private var musicKey = ""
     private var musicArtUrl = ""
     private lateinit var leftCol: LinearLayout
@@ -109,6 +119,8 @@ class AgentService : AccessibilityService(), Controls {
     private lateinit var queueScroll: ScrollView  // lista de canciones de lo que suena, también en el lugar de la cara
     private lateinit var queueList: LinearLayout
     private var musicList = ""                    // "spotify:playlist:…" de la canción actual
+    private var youtubeView: android.webkit.WebView? = null   // reproductor de YouTube en miniatura, en el lugar de la cara
+    private lateinit var youtubeBox: android.widget.FrameLayout
     private var musicTrack = ""
     private var detailJob: Job? = null
     private lateinit var rightCol: LinearLayout
@@ -127,7 +139,10 @@ class AgentService : AccessibilityService(), Controls {
     private var followUp = false
 
     /** Herramientas que ve Gemini: las de la consola más las de servidores MCP conectados. */
-    fun allTools(): List<Tool> = localTools + Web.tools(prefs) + WakeOnLan.tools(prefs) + alarms.tools() + memory.tools() + routines.tools() + faceTools() + remoteClients.flatMap { it.asTools() }
+    fun allTools(): List<Tool> = localTools + Web.tools(prefs) + WakeOnLan.tools(prefs) + alarms.tools() + memory.tools() + routines.tools() + faceTools() +
+        (if (alexa.configured) alexa.tools() else emptyList()) +
+        // Con el puente de Alexa en la consola, las mismas herramientas de casa sobran (y confundirían al modelo)
+        remoteClients.flatMap { it.asTools() }.filterNot { alexa.configured && Regex("""\.(alexa_[a-z_]+|spotify_lista)$""").containsMatchIn(it.name) }
 
     override fun onServiceConnected() {
         GestureService.setEnabled(this, false)   // por si quedó prendido (crash o reinicio)
@@ -146,7 +161,11 @@ class AgentService : AccessibilityService(), Controls {
             while (true) {
                 kotlinx.coroutines.delay(120_000)
                 val configured = McpClient.parse(prefs.mcpServers).size
-                if (remoteClients.size < configured) reloadRemoteServers()
+                if (remoteClients.size < configured) {
+                    reloadRemoteServers().join()
+                    // Si sigue sin conectar, quizá el router le cambió la IP a la computadora: se busca en la red
+                    if (remoteClients.size < configured && findMovedServers()) reloadRemoteServers()
+                }
             }
         }
         alarms.restore()
@@ -181,7 +200,7 @@ class AgentService : AccessibilityService(), Controls {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
         wake.word = prefs.wakeWord
         wake.start()
-        if (::stateView.isInitialized && state == State.IDLE) stateView.text = "Di \"Hey ${prefs.assistantName}\" o presiona X"
+        if (::stateView.isInitialized && state == State.IDLE) stateView.text = "Di \"Hey ${prefs.assistantName}\""
     }
 
     private fun onWake() {
@@ -199,6 +218,49 @@ class AgentService : AccessibilityService(), Controls {
 
     private fun chime() = runCatching {
         android.media.ToneGenerator(AudioManager.STREAM_MUSIC, 60).startTone(android.media.ToneGenerator.TONE_PROP_ACK, 150)
+    }
+
+    /**
+     * Busca en la red local los servidores de los ajustes que dejaron de responder (el router cambió la IP de la
+     * computadora): prueba el mismo puerto en las 254 direcciones de la red y, si un equipo responde como casa con la
+     * misma clave, actualiza la dirección guardada. Devuelve true si cambió algo.
+     */
+    private suspend fun findMovedServers(): Boolean = withContext(Dispatchers.IO) {
+        val myIp = java.net.NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is java.net.Inet4Address && !it.isLoopbackAddress }?.hostAddress ?: return@withContext false
+        val prefix = myIp.substringBeforeLast(".")
+        var changed = false
+        val lines = prefs.mcpServers.lines().map { line ->
+            val p = line.split("|").map { it.trim() }
+            if (p.size < 3 || remoteClients.any { it.alias == McpClient.safeName(p[0]) }) return@map line
+            val url = java.net.URL(p[1])
+            val port = if (url.port > 0) url.port else 80
+            val sem = kotlinx.coroutines.sync.Semaphore(32)
+            val found = kotlinx.coroutines.coroutineScope {
+                (1..254).map { n ->
+                    async {
+                        sem.withPermit {
+                            val host = "$prefix.$n"
+                            runCatching {
+                                val c = (java.net.URL("http://$host:$port/voz").openConnection() as java.net.HttpURLConnection).apply {
+                                    requestMethod = "POST"; connectTimeout = 400; readTimeout = 1500; doOutput = true
+                                    setRequestProperty("Authorization", "Bearer ${p[2]}")
+                                }
+                                c.outputStream.use { it.write("{}".toByteArray()) }
+                                // casa responde 400 ("sin texto") con la clave correcta; 401 sería otra clave
+                                val ok = c.responseCode == 400
+                                c.disconnect()
+                                if (ok) host else null
+                            }.getOrNull()
+                        }
+                    }
+                }.awaitAll().filterNotNull().firstOrNull()
+            }
+            if (found == null || found == url.host) line
+            else { changed = true; android.util.Log.i("Asistente", "${p[0]} se movió a $found"); "${p[0]}|${p[1].replace(url.host, found)}|${p[2]}" }
+        }
+        if (changed) prefs.mcpServers = lines.joinToString("\n")
+        changed
     }
 
     /** Conecta los servidores MCP externos de los ajustes. Devuelve un resumen. */
@@ -257,19 +319,307 @@ class AgentService : AccessibilityService(), Controls {
 
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
+    /** Oculta la barra de estado de Android mientras el panel está abierto (vuelve deslizando desde arriba). */
+    private fun hideSystemBars() {
+        panel?.post {
+            panel?.windowInsetsController?.apply {
+                hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+    }
+
     private fun statusBarHeight(): Int {
         val id = resources.getIdentifier("status_bar_height", "dimen", "android")
         return if (id > 0) resources.getDimensionPixelSize(id) else 0
     }
 
-    /** Con música sonando, los botones de volumen de la consola suben o bajan el Echo (de 5 en 5). */
-    private fun echoVolume(cambio: Int) {
-        val c = musicClient() ?: return
-        scope.launch {
-            val r = withContext(Dispatchers.IO) {
-                runCatching { c.call("alexa_volumen", org.json.JSONObject().put("cambio", cambio)).text }.getOrNull()
+    /**
+     * Pone al Echo en modo de emparejamiento, lo busca por Bluetooth (nombre con "Echo") y lo vincula.
+     * Así no hay que pasar por la pantalla de ajustes, que queda debajo del panel de Monki.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun pairWithEcho(): String {
+        val bt = (getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter ?: return "Esta consola no tiene Bluetooth."
+        bt.bondedDevices.firstOrNull { it.name?.contains("Echo", true) == true }?.let { return "Ya está emparejada con ${it.name}." }
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            return "Falta el permiso de ubicación (Android lo pide para buscar equipos Bluetooth)."
+        echoCall("alexa_comando", org.json.JSONObject().put("texto", "empareja bluetooth"))
+        kotlinx.coroutines.delay(4000)
+        val found = kotlinx.coroutines.CompletableDeferred<android.bluetooth.BluetoothDevice?>()
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context, i: android.content.Intent) {
+                val d = i.getParcelableExtra<android.bluetooth.BluetoothDevice>(android.bluetooth.BluetoothDevice.EXTRA_DEVICE) ?: return
+                if (d.name?.contains("Echo", true) == true && !found.isCompleted) found.complete(d)
             }
-            if (r != null && ::caption.isInitialized) caption.text = "🔊 ${r.removeSuffix(".")}"
+        }
+        registerReceiver(receiver, android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_FOUND))
+        try {
+            bt.startDiscovery()
+            val echo = kotlinx.coroutines.withTimeoutOrNull(25_000) { found.await() } ?: return "No encontré el Echo. Dile \"empareja Bluetooth\" y vuelve a intentar."
+            bt.cancelDiscovery()
+            // Android pregunta "¿Vincular?": se oculta el panel para que el aviso quede arriba y Monki lo acepta solo
+            withContext(Dispatchers.Main) { setOverlaysVisible(false) }
+            echo.createBond()
+            repeat(20) {
+                kotlinx.coroutines.delay(1000)
+                if (echo.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED) {
+                    withContext(Dispatchers.Main) { setOverlaysVisible(true) }
+                    return "Listo, emparejada con ${echo.name}."
+                }
+                withContext(Dispatchers.Main) {
+                    for (b in listOf("Vincular", "Sincronizar", "Emparejar", "Pair")) {
+                        if (!clickText(b).startsWith("No")) break
+                    }
+                }
+            }
+            withContext(Dispatchers.Main) { setOverlaysVisible(true) }
+            return "Intenté emparejar con ${echo.name}, pero no terminó. Revisa si la consola muestra una pregunta."
+        } finally {
+            runCatching { unregisterReceiver(receiver) }; bt.cancelDiscovery()
+        }
+    }
+
+    /**
+     * La consola abre la conexión de audio (A2DP) con el Echo emparejado, como un teléfono. Usa la función interna
+     * BluetoothA2dp.connect: en Android 11 está oculta a las apps, así que antes se habilita el acceso a funciones
+     * internas (VMRuntime.setHiddenApiExemptions por doble reflexión, que funciona hasta Android 11).
+     * (El menú de Bluetooth de Android se queda en negro en esta consola: no sirve para tocar el Echo.)
+     */
+    @SuppressLint("MissingPermission", "DiscouragedPrivateApi", "SoonBlockedPrivateApi")
+    private suspend fun connectFromSettings(bt: android.bluetooth.BluetoothAdapter): Boolean {
+        val echo = bt.bondedDevices.firstOrNull { it.name?.contains("Echo", true) == true } ?: return false
+        runCatching {
+            val forName = Class::class.java.getDeclaredMethod("forName", String::class.java)
+            val getMethod = Class::class.java.getDeclaredMethod("getDeclaredMethod", String::class.java, arrayOf<Class<*>>()::class.java)
+            val vmRuntime = forName.invoke(null, "dalvik.system.VMRuntime") as Class<*>
+            val getRuntime = getMethod.invoke(vmRuntime, "getRuntime", null) as java.lang.reflect.Method
+            val setExemptions = getMethod.invoke(vmRuntime, "setHiddenApiExemptions", arrayOf(Array<String>::class.java)) as java.lang.reflect.Method
+            setExemptions.invoke(getRuntime.invoke(null), arrayOf("L"))
+        }.onFailure { android.util.Log.w("Asistente", "Funciones internas: ${it.javaClass.simpleName}: ${it.message}") }
+        val proxy = kotlinx.coroutines.CompletableDeferred<android.bluetooth.BluetoothA2dp?>()
+        bt.getProfileProxy(this, object : android.bluetooth.BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(p: Int, profile: android.bluetooth.BluetoothProfile) { proxy.complete(profile as android.bluetooth.BluetoothA2dp) }
+            override fun onServiceDisconnected(p: Int) { if (!proxy.isCompleted) proxy.complete(null) }
+        }, android.bluetooth.BluetoothProfile.A2DP)
+        val a2dp = kotlinx.coroutines.withTimeoutOrNull(3000) { proxy.await() } ?: return false
+        try {
+            val ok = a2dp.javaClass.getMethod("connect", android.bluetooth.BluetoothDevice::class.java).invoke(a2dp, echo) as? Boolean
+            android.util.Log.i("Asistente", "A2DP connect desde la consola: $ok")
+            if (ok != true) return false
+            for (i in 0 until 20) { kotlinx.coroutines.delay(500); if (audioOnSpeaker()) return true }
+            return audioOnSpeaker()
+        } catch (e: Exception) {
+            android.util.Log.w("Asistente", "A2DP connect: ${e.javaClass.simpleName}: ${e.cause?.message ?: e.message}")
+            return false
+        } finally {
+            bt.closeProfileProxy(android.bluetooth.BluetoothProfile.A2DP, a2dp)
+        }
+    }
+
+    /** Acepta la pregunta "¿Vincular?" de Android: oculta el panel para que quede visible y toca el botón. */
+    private suspend fun acceptPairingDialog() {
+        withContext(Dispatchers.Main) { setOverlaysVisible(false) }
+        for (i in 0 until 8) {
+            kotlinx.coroutines.delay(500)
+            val done = withContext(Dispatchers.Main) {
+                listOf("Pair", "Vincular", "Sincronizar", "Emparejar").any { !clickText(it).startsWith("No") }
+            }
+            if (done) break
+        }
+        kotlinx.coroutines.delay(800)
+        withContext(Dispatchers.Main) { setOverlaysVisible(true) }
+    }
+
+    /** ¿El audio de la consola sale ahora por Bluetooth (el Echo)? */
+    private fun audioOnSpeaker(): Boolean = (getSystemService(AUDIO_SERVICE) as AudioManager)
+        .getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+
+    /**
+     * Por dónde sale el sonido de la consola: se le pide al Echo que se conecte o desconecte nombrando a la consola
+     * ("conéctate a rk3566" / "desconéctate de rk3566"); a secas ("conecta bluetooth") a veces no obedece.
+     * Si el Echo no se desconecta, se apaga el Bluetooth (en esta consola eso borra el emparejamiento; al volver a la
+     * bocina se empareja solo otra vez).
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun setAudioOutput(toSpeaker: Boolean): String {
+        val bt = (getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter
+            ?: return "Esta consola no tiene Bluetooth."
+        // Consola con Spotify sonando en otro equipo (el Echo): la música se pasa a Spotify de la consola (Spotify Connect).
+        // Se pregunta en vivo a Spotify, porque con el panel cerrado Monki no sigue la música.
+        if (!toSpeaker && spotify.configured && spotifyPlayingElsewhere()) {
+            if (audioOnSpeaker()) setAudioOutputBluetoothOnly(false, bt)
+            return musicToConsole()
+        }
+        // ¿Sonaba un video? Al cambiar de salida Android puede pausarlo: se reanuda al terminar
+        val videoWasPlaying = youtubeState() == 1
+        android.util.Log.i("Asistente", "Video antes del cambio: ${youtubeState()}")
+        // ¿Sonaba Spotify antes del cambio? Al soltar el Bluetooth Android lo pausa (como al quitar unos audífonos)
+        val wasPlaying = spotify.configured && withContext(Dispatchers.IO) {
+            runCatching { spotify.nowPlaying()?.optString("estado") == "sonando" }.getOrDefault(false)
+        }
+        val r = setAudioOutputBluetoothOnly(toSpeaker, bt)
+        if (!toSpeaker && spotify.configured) {
+            for (i in 0 until 6) {
+                kotlinx.coroutines.delay(1000)
+                // A veces Spotify brinca a sonar en el Echo mismo: se regresa a la consola
+                if (spotifyPlayingElsewhere()) return musicToConsole()
+            }
+            if (wasPlaying) withContext(Dispatchers.IO) {
+                runCatching { if (spotify.nowPlaying()?.optString("estado") != "sonando") spotify.play() }
+            }
+        }
+        if (videoWasPlaying) {
+            kotlinx.coroutines.delay(800)
+            val after = youtubeState()
+            android.util.Log.i("Asistente", "Video después del cambio: $after")
+            if (after != 1) youtubePlay()
+        }
+        return r
+    }
+
+    private val spotify by lazy { Spotify(prefs) }
+
+    private fun isConsoleDevice(d: Spotify.Device) =
+        d.type.equals("Smartphone", true) || d.name.contains(android.os.Build.MODEL, true) || d.name.contains("RG353", true)
+
+    /** ¿Spotify está activo en otro equipo que no es la consola (p. ej. el Echo)? */
+    private suspend fun spotifyPlayingElsewhere(): Boolean = withContext(Dispatchers.IO) {
+        runCatching { spotify.devices().any { it.active && !isConsoleDevice(it) } }.getOrDefault(false)
+    }
+
+    /**
+     * Pasa lo que suena en el Echo a Spotify de la consola, en la misma canción y segundo. Si la consola todavía no
+     * aparece como dispositivo, abre Spotify en segundo plano para que se registre.
+     */
+    private suspend fun musicToConsole(): String = withContext(Dispatchers.IO) {
+        fun consoleDevice() = spotify.devices().firstOrNull { isConsoleDevice(it) }
+        runCatching {
+            var dev = consoleDevice()
+            if (dev == null) {
+                withContext(Dispatchers.Main) {
+                    packageManager.getLaunchIntentForPackage("com.spotify.music")?.let { startActivity(it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+                for (i in 0 until 10) { kotlinx.coroutines.delay(1000); dev = consoleDevice(); if (dev != null) break }
+            }
+            val target = dev ?: return@runCatching "No encontré Spotify de la consola. Ábrelo una vez y vuelve a intentar."
+            youtubePause()
+            spotify.transfer(target.id)
+            withContext(Dispatchers.Main) { musicPausedSince = System.currentTimeMillis() - 120_000; refreshMusic(); updateAudioButton() }
+            "Listo, la música sigue en la consola."
+        }.getOrElse { "No pude pasar la música a la consola: ${it.message}" }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun setAudioOutputBluetoothOnly(toSpeaker: Boolean, bt: android.bluetooth.BluetoothAdapter): String {
+        if (audioOnSpeaker() == toSpeaker) {
+            withContext(Dispatchers.Main) { updateAudioButton() }
+            return if (toSpeaker) "El sonido ya sale por la bocina." else "El sonido ya sale por la consola."
+        }
+        if (toSpeaker && !bt.isEnabled) {
+            @Suppress("DEPRECATION") bt.enable()
+            for (i in 0 until 20) { if (bt.isEnabled) break; kotlinx.coroutines.delay(500) }
+            kotlinx.coroutines.delay(2000)
+        }
+        // Si se perdió el vínculo (pasa cuando el Echo pide re-emparejar y nadie acepta), se empareja otra vez solo
+        if (toSpeaker && bt.bondedDevices.none { it.name?.contains("Echo", true) == true }) {
+            withContext(Dispatchers.Main) { if (::caption.isInitialized) caption.text = "🔊 Emparejando con el Echo…" }
+            val r = pairWithEcho()
+            if (bt.bondedDevices.none { it.name?.contains("Echo", true) == true }) return r
+        }
+        // Al conectarse, el Echo a veces pide emparejar de nuevo: se acepta solo (si nadie acepta, Android borra el vínculo)
+        val pairingReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context, i: android.content.Intent) {
+                scope.launch { acceptPairingDialog() }
+            }
+        }
+        if (toSpeaker) registerReceiver(pairingReceiver, android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_PAIRING_REQUEST))
+        try {
+        // La consola se conecta al Echo: Monki abre los ajustes de Bluetooth y toca el Echo, como se haría a mano
+        // (Android no deja que una app normal abra la conexión de audio por código).
+        if (toSpeaker && connectFromSettings(bt)) {
+            withContext(Dispatchers.Main) { updateAudioButton() }
+            return "Listo, la consola se conectó al Echo: el sonido sale por la bocina."
+        }
+        if (!echoAvailable()) return "No hay conexión con el Echo."
+        val name = bt.name
+        val orders = if (toSpeaker) listOfNotNull(name?.let { "conéctate a $it" }, "conecta bluetooth")
+            else listOfNotNull(name?.let { "desconéctate de $it" })
+        for (order in orders) {
+            echoCall("alexa_comando", org.json.JSONObject().put("texto", order))
+            for (i in 0 until if (toSpeaker) 15 else 4) {
+                kotlinx.coroutines.delay(1000)
+                if (audioOnSpeaker() == toSpeaker) {
+                    withContext(Dispatchers.Main) { updateAudioButton() }
+                    return if (toSpeaker) "Listo, el sonido de la consola sale por la bocina." else "Listo, el sonido sale por la consola."
+                }
+            }
+        }
+        } finally {
+            if (toSpeaker) runCatching { unregisterReceiver(pairingReceiver) }
+        }
+        // Consola: si el Echo no soltó la conexión, se apaga el Bluetooth (se pierde el emparejamiento; la bocina lo rehace sola)
+        if (!toSpeaker && bt.isEnabled) {
+            @Suppress("DEPRECATION") bt.disable()
+            for (i in 0 until 10) { if (!audioOnSpeaker()) break; kotlinx.coroutines.delay(500) }
+            withContext(Dispatchers.Main) { updateAudioButton() }
+            if (!audioOnSpeaker()) return "Listo, el sonido sale por la consola."
+        }
+        withContext(Dispatchers.Main) { updateAudioButton() }
+        return if (toSpeaker) "El Echo no se conectó; intenta de nuevo." else "No pude regresar el sonido a la consola."
+    }
+
+    /** Volumen: si suena Spotify en el Echo, el del Echo; si no, el de la consola (que va al Echo si está por Bluetooth). */
+    private fun currentVolumeTarget() =
+        if (musicPlaying && ::musicBar.isInitialized && musicBar.visibility == View.VISIBLE && !audioOnSpeaker() &&
+            !musicDeviceType.equals("Smartphone", true)) "bocina" else "consola"
+
+    private fun updateAudioButton() {
+        // Spotify sonando en el Echo cuenta como "bocina": tocar el botón lo trae a la consola
+        if (::audioButton.isInitialized) audioButton.text =
+            if (audioOnSpeaker() || (musicPlaying && musicSource == "spotify" && !musicDeviceType.equals("Smartphone", true))) "🔊 Bocina" else "📺 Consola"
+    }
+
+    /** Muestra a dónde va el volumen y en qué nivel está. */
+    private fun showVolume(level: Int? = null) {
+        if (!::caption.isInitialized) return
+        val pct = level ?: if (currentVolumeTarget() == "consola") consolePercent() else null
+        val bar = pct?.let { p -> " " + "▮".repeat((p + 5) / 10) + "▯".repeat(10 - (p + 5) / 10) + " $p%" } ?: ""
+        caption.text = (if (currentVolumeTarget() == "bocina") "🔊 Spotify en la bocina" else if (audioOnSpeaker()) "🔊 Bocina (Bluetooth)" else "📺 Consola") + bar
+    }
+
+    private fun consolePercent(): Int {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        return am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    }
+
+    /** Volumen de la bocina de la consola (videos, juegos, la voz de Monki). */
+    private fun consoleVolume(up: Boolean) {
+        (getSystemService(AUDIO_SERVICE) as AudioManager).adjustStreamVolume(AudioManager.STREAM_MUSIC,
+            if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
+        showVolume()
+    }
+
+    /** Volumen del Echo que está sonando (de 5 en 5). */
+    private fun echoVolume(cambio: Int) {
+        if (musicSource == "spotify") {
+            scope.launch {
+                val level = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val now = spotify.nowPlaying()?.optInt("volumen", -1) ?: -1
+                        val v = ((if (now >= 0) now else 50) + cambio).coerceIn(0, 100)
+                        spotify.volume(v); v
+                    }.getOrNull()
+                }
+                if (level != null) showVolume(level)
+            }
+            return
+        }
+        if (!echoAvailable()) { if (::caption.isInitialized) caption.text = "🔊 Bocina: sin conexión con el Echo"; return }
+        scope.launch {
+            val r = echoCall("alexa_volumen", org.json.JSONObject().put("cambio", cambio))
+            val level = r?.let { Regex("(\\d+)").find(it)?.value?.toIntOrNull() }
+            if (level != null) showVolume(level) else if (r != null && ::caption.isInitialized) caption.text = "🔊 Bocina: $r"
         }
     }
 
@@ -289,7 +639,7 @@ class AgentService : AccessibilityService(), Controls {
             setBackgroundResource(R.drawable.bubble)
             setPadding(dp(4), dp(4), dp(4), dp(4))
             expression = emotion.toExpression()
-            eyeColor = faceColor()
+            eyeColor = moodColor()
         }
         val lp = overlayParams(size, size, false).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -332,7 +682,7 @@ class AgentService : AccessibilityService(), Controls {
             isFocusable = true; setOnClickListener { onClick() }
         }
         val bg = Color.parseColor("#0E1311")
-        faceView = EyesView(this).apply { setBackgroundColor(bg); isFocusable = false; eyeColor = faceColor() }
+        faceView = EyesView(this).apply { setBackgroundColor(bg); isFocusable = false; eyeColor = moodColor() }
         stateView = TextView(this).apply { setTextColor(Color.parseColor("#9AA6A1")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
         caption = TextView(this).apply {
             setTextColor(Color.parseColor("#E4E9E6")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -413,8 +763,10 @@ class AgentService : AccessibilityService(), Controls {
             }
             queueList = LinearLayout(this@AgentService).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)) }
             queueScroll = ScrollView(this@AgentService).apply { visibility = View.GONE; addView(queueList) }
+            youtubeBox = android.widget.FrameLayout(this@AgentService).apply { visibility = View.GONE }
             addView(android.widget.FrameLayout(this@AgentService).apply {
                 addView(faceView, android.widget.FrameLayout.LayoutParams(-1, -1))
+                addView(youtubeBox, android.widget.FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
                 addView(detailView, android.widget.FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
                 addView(queueScroll, android.widget.FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
             }, LinearLayout.LayoutParams(0, -1, 1f))
@@ -427,7 +779,22 @@ class AgentService : AccessibilityService(), Controls {
                 setTextColor(Color.parseColor("#9AA6A1")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setPadding(0, 0, dp(10), 0)
             }
             addView(clockView)
-            addView(btn("🕘 Historial") {
+            // Por dónde sale el sonido de la consola: tocarlo cambia entre su bocina y el Echo (por Bluetooth)
+            audioButton = btn("📺 Consola") {
+                if (audioSwitching) return@btn   // ya está cambiando: un segundo toque lo revertiría a medias
+                audioSwitching = true
+                audioButton.text = "⏳ Cambiando…"
+                scope.launch {
+                    // A la consola si el sonido ya va al Echo (Bluetooth) o si Spotify suena en otro equipo; si no, al Echo
+                    val toSpeaker = !audioOnSpeaker() && !(spotify.configured && spotifyPlayingElsewhere())
+                    audioButton.text = if (toSpeaker) "🔊 Conectando…" else "📺 Cambiando…"
+                    val r = try { setAudioOutput(toSpeaker) } finally { audioSwitching = false }
+                    updateAudioButton()
+                    if (::caption.isInitialized) caption.text = r
+                }
+            }
+            addView(audioButton)
+            addView(btn("🕘") {
                 val show = logScroll.visibility != View.VISIBLE
                 logScroll.visibility = if (show) View.VISIBLE else View.GONE
                 faceView.visibility = if (show) View.GONE else View.VISIBLE
@@ -435,7 +802,12 @@ class AgentService : AccessibilityService(), Controls {
                 faceRow.visibility = faceView.visibility
                 if (show) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             })
-            addView(btn("✚ Nuevo") { agent.reset(); log.text = ""; say("Conversación nueva. ¿En qué te ayudo?", speak = false) })
+            // YouTube: abre el teclado con el pedido empezado, solo falta escribir qué video
+            addView(btn("▶ YouTube") {
+                input.setText("Pon en YouTube "); input.setSelection(input.text.length)
+                setTypingMode(true)
+            })
+            addView(btn("✚") { agent.reset(); log.text = ""; say("Conversación nueva. ¿En qué te ayudo?", speak = false) })
             addView(btn("✕") { hidePanel() })
         }
         input = EditText(this).apply {
@@ -465,16 +837,21 @@ class AgentService : AccessibilityService(), Controls {
         return object : LinearLayout(this) {
             override fun dispatchKeyEvent(e: KeyEvent): Boolean {
                 if (e.action == KeyEvent.ACTION_DOWN && asleep) { wakeUp(); return true }
+                // Con un detalle abierto, cualquier botón regresa a la cara (la lista de canciones sí se navega con la cruceta)
+                if (e.action == KeyEvent.ACTION_DOWN && ::detailView.isInitialized && detailView.visibility == View.VISIBLE &&
+                    e.keyCode != KeyEvent.KEYCODE_VOLUME_UP && e.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) { hideDetail(); return true }
                 if (e.action == KeyEvent.ACTION_DOWN && ringing != null) { ringing?.cancel(); ringing = null; startWake(); return true }
                 if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) when (e.keyCode) {
                     KeyEvent.KEYCODE_BUTTON_X -> { toggleMic(); return true }
                     KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
                         if (::detailView.isInitialized && (detailView.visibility == View.VISIBLE || queueScroll.visibility == View.VISIBLE)) { hideDetail(); return true }
+                        if (youtubeView != null) { closeYoutube(); return true }
                         if (job?.isActive == true || state == State.SPEAKING || recorder.isRecording) interrupt() else hidePanel()
                         return true
                     }
-                    KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> if (::musicBar.isInitialized && musicBar.visibility == View.VISIBLE) {
-                        echoVolume(if (e.keyCode == KeyEvent.KEYCODE_VOLUME_UP) 5 else -5)
+                    KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        val up = e.keyCode == KeyEvent.KEYCODE_VOLUME_UP
+                        if (currentVolumeTarget() == "bocina") echoVolume(if (up) 5 else -5) else consoleVolume(up)
                         return true
                     }
                     KeyEvent.KEYCODE_BUTTON_A -> {
@@ -483,9 +860,12 @@ class AgentService : AccessibilityService(), Controls {
                     }
                 }
                 if (e.keyCode in listOf(KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BACK)) return true
-                // Con música, el volumen de la consola no se toca (ni al soltar ni al mantener)
-                if ((e.keyCode == KeyEvent.KEYCODE_VOLUME_UP || e.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) &&
-                    ::musicBar.isInitialized && musicBar.visibility == View.VISIBLE) return true
+                // El volumen lo maneja Monki (consola o bocina); manteniéndolo presionado sigue subiendo la consola
+                if (e.keyCode == KeyEvent.KEYCODE_VOLUME_UP || e.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                    if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount > 0 && currentVolumeTarget() == "consola")
+                        consoleVolume(e.keyCode == KeyEvent.KEYCODE_VOLUME_UP)
+                    return true
+                }
                 return super.dispatchKeyEvent(e)
             }
         }.apply {
@@ -517,7 +897,7 @@ class AgentService : AccessibilityService(), Controls {
         wakeUp()
         val (_, h) = screenSize
         val lp = root.layoutParams as WindowManager.LayoutParams
-        lp.height = if (on) (h * 0.5).toInt() else h - statusBarHeight()
+        lp.height = if (on) (h * 0.5).toInt() else h
         lp.gravity = Gravity.TOP or Gravity.START
         runCatching { wm.updateViewLayout(root, lp) }
         faceView.visibility = if (on) View.GONE else View.VISIBLE
@@ -540,12 +920,15 @@ class AgentService : AccessibilityService(), Controls {
     fun showPanel() {
         if (panel == null) {
             val (w, h) = screenSize
-            // La ventana empieza debajo de la barra de estado: con la altura completa, la fila de abajo quedaba fuera
-            val lp = overlayParams(w, h - statusBarHeight(), true).apply {
+            // Pantalla completa: la ventana ocupa también la franja de la barra de estado de Android (que se oculta)
+            val lp = overlayParams(w, h, true).apply {
+                fitInsetsTypes = 0
+                flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_FULLSCREEN
                 gravity = Gravity.TOP or Gravity.START
                 softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             }
             panel = buildPanel().also { wm.addView(it, lp) }
+            hideSystemBars()
             setState(state)
             pcAt = 0L; updateWidgets()
             if (log.text.isEmpty()) say("Hola, ¿qué hacemos? Escribe, o presiona X para hablar. B interrumpe.", speak = false)
@@ -583,7 +966,7 @@ class AgentService : AccessibilityService(), Controls {
     }
 
     /** Dice un texto en voz alta (para probar la voz desde adb). */
-    fun announce(text: String) = say(text)
+    fun announce(text: String) { lastWasVoice = false; say(text) }
 
     /** Hace un pedido escrito (para probar desde adb). */
     fun askText(text: String) { if (panel == null) showPanel(); turnStart = System.currentTimeMillis(); run(text, null, "Tú: $text") }
@@ -749,10 +1132,16 @@ class AgentService : AccessibilityService(), Controls {
     private var geminiVoiceFailedAt = 0L
     private var edgeFailedAt = 0L
 
-    /** Después de cada respuesta: en modo Alexa sigue escuchando unos segundos, luego vuelve a la palabra de activación. */
+    /**
+     * Después de cada respuesta: en modo Alexa sigue escuchando unos segundos, luego vuelve a la palabra de activación.
+     * Solo si el pedido fue por voz, y nunca con música sonando: el micrófono la tomaba por voz, grababa 30 s,
+     * la transcribía y "respondía", y eso volvía a encender la escucha.
+     */
     private fun afterTurn() {
         if (!prefs.alexaMode) return
-        if (lastWasVoice) { followUp = true; toggleMic() } else startWake()
+        val follow = lastWasVoice && !musicPlaying
+        lastWasVoice = false
+        if (follow) { followUp = true; toggleMic() } else startWake()
     }
     private var lastWasVoice = false
 
@@ -760,7 +1149,7 @@ class AgentService : AccessibilityService(), Controls {
         visualizer?.run { runCatching { enabled = false }; release() }
         visualizer = null
         setTalking(false)
-        wake.strict = false
+        wake.strict = youtubeView != null   // con un video abierto sigue estricto
         player?.run { runCatching { stop() }; release() }
         player = null
     }
@@ -784,7 +1173,7 @@ class AgentService : AccessibilityService(), Controls {
     }
 
     private fun applyFace(detail: String? = null) {
-        val animo = musicMood ?: currentMood()
+        val animo = videoMood ?: musicMood ?: currentMood()
         val recent = emotion != Emotion.NEUTRAL && System.currentTimeMillis() - emotionAt < EMOTION_SHOWN_MS
         val expr = when (state) {
             State.IDLE -> if (recent) emotion.toExpression() else animo.expression
@@ -793,7 +1182,7 @@ class AgentService : AccessibilityService(), Controls {
             State.SPEAKING -> if (emotion == Emotion.NEUTRAL) Expression.SPEAKING else emotion.toExpression()
         }
         // Con música, la cara toma el color y el ánimo de la canción, y se mece si es alegre
-        val color = musicMood?.let { Color.parseColor(it.color) } ?: faceColor(animo)
+        val color = moodColor()   // el mismo color en la cara, los widgets y los botones
         val dance = musicMood in listOf(Animo.FELIZ, Animo.EMOCIONADO) && state == State.IDLE
         if (::faceView.isInitialized) {
             faceView.expression = expr
@@ -802,6 +1191,19 @@ class AgentService : AccessibilityService(), Controls {
             stateView.text = detail ?: if (state == State.IDLE) "${state.label} · ánimo: ${animo.tag}${if (musicMood != null) " 🎵" else ""}" else state.label
         }
         bubble?.let { it.expression = expr; it.eyeColor = color; it.dancing = dance }
+    }
+
+    /** Emparejar con el Echo o cambiar la salida de sonido (por adb: --es audio emparejar|bocina|consola). */
+    fun audioCommand(cmd: String) {
+        scope.launch {
+            val r = when (cmd.trim().lowercase()) {
+                "emparejar" -> pairWithEcho()
+                "bocina" -> setAudioOutput(true)
+                else -> setAudioOutput(false)
+            }
+            android.util.Log.i("Asistente", "Audio: $r")
+            if (::caption.isInitialized) caption.text = r
+        }
     }
 
     /** Fija el ánimo a mano (por adb: --es animo feliz). */
@@ -813,7 +1215,8 @@ class AgentService : AccessibilityService(), Controls {
     fun refreshFace() {
         drawWidgets()
         tintMainButtons()
-        if (asleep) { faceColor().let { c -> if (::faceView.isInitialized) faceView.eyeColor = c; bubble?.eyeColor = c }; return }
+        updateAudioButton()   // por si el Echo se conectó o desconectó por Bluetooth
+        if (asleep) { moodColor().let { c -> if (::faceView.isInitialized) faceView.eyeColor = c; bubble?.eyeColor = c }; return }
         applyFace()
     }
 
@@ -825,8 +1228,260 @@ class AgentService : AccessibilityService(), Controls {
     private fun faceColor(animo: Animo = currentMood()) =
         FaceColors.parse(prefs.faceColor) ?: Color.parseColor(animo.color)
 
+    /**
+     * Video de YouTube en miniatura, en el lugar de la cara (reproductor oficial para insertar, en un WebView).
+     * El origen falso da a YouTube un "referer": sin él, los videos insertados en apps fallan (error 153).
+     */
+    private fun showYoutube(id: String, title: String) {
+        if (panel == null) showPanel()
+        // Que no suenen Spotify y el video a la vez: pausa al instante con la tecla de pausa del sistema (la recibe la
+        // app que esté sonando en la consola) y, por si acaso, también por la API de Spotify
+        (getSystemService(AUDIO_SERVICE) as AudioManager).let { am ->
+            if (am.isMusicActive) {
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
+            }
+        }
+        if (spotify.configured) scope.launch(Dispatchers.IO) {
+            runCatching {
+                val now = spotify.nowPlaying()
+                // Esté donde esté (consola o Echo), para que el video se escuche solo
+                if (now?.optString("estado") == "sonando") spotify.pause()
+            }
+        }
+        hideDetail()
+        closeYoutube()
+        val accent = moodColor()
+        val web = android.webkit.WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.domStorageEnabled = true
+            setBackgroundColor(Color.BLACK)
+            addJavascriptInterface(object {
+                @android.webkit.JavascriptInterface fun error(code: String) { post { onYoutubeError(code.toIntOrNull() ?: -1) } }
+            }, "Monki")
+            isFocusable = false
+            // enablejsapi: Monki puede saber si el video suena (window.ytState: 1 = reproduciendo) y reanudarlo
+            val html = """<html><body style="margin:0;background:#000">
+                <iframe id="yt" width="100%" height="100%" src="https://www.youtube.com/embed/$id?autoplay=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=https://monki.app"
+                 frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen
+                 referrerpolicy="strict-origin-when-cross-origin"></iframe>
+                <script>
+                  window.ytState = -1;
+                  window.ytInfo = {t: 0, d: 0, title: ''};
+                  var yt = document.getElementById('yt');
+                  function cmd(f, a) { yt.contentWindow.postMessage(JSON.stringify({event: 'command', func: f, args: a || ''}), '*'); }
+                  yt.addEventListener('load', function () {
+                    setTimeout(function () { yt.contentWindow.postMessage(JSON.stringify({event: 'listening', id: 1}), '*'); }, 500);
+                  });
+                  window.addEventListener('message', function (e) {
+                    try {
+                      var d = JSON.parse(e.data);
+                      if (d.info && d.info.playerState !== undefined) window.ytState = d.info.playerState;
+                      if (d.info && d.info.currentTime !== undefined) window.ytInfo.t = d.info.currentTime;
+                      if (d.info && d.info.duration) window.ytInfo.d = d.info.duration;
+                      if (d.info && d.info.videoData && d.info.videoData.title) window.ytInfo.title = d.info.videoData.title;
+                      if (d.event === 'onError') Monki.error(String(d.info));   // 101/150 = su dueño no deja verlo en otras apps
+                    } catch (x) {}
+                  });
+                </script></body></html>"""
+            loadDataWithBaseURL("https://monki.app/", html, "text/html", "utf-8", null)
+        }
+        youtubeView = web
+        youtubeBox.removeAllViews()
+        youtubeBox.background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.BLACK); setStroke(dp(1), accent) }
+        youtubeBox.clipToOutline = true
+        youtubeBox.addView(web, android.widget.FrameLayout.LayoutParams(-1, -1))
+        youtubeBox.addView(TextView(this).apply {
+            text = "✕"; gravity = Gravity.CENTER; setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = buttonBackground(Color.parseColor("#AA000000"), oval = true, inset = 0)
+            isFocusable = true; setOnClickListener { closeYoutube() }
+        }, android.widget.FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(6), dp(6), 0) })
+        youtubeBox.visibility = View.VISIBLE
+        faceView.visibility = View.INVISIBLE
+        wake.strict = true   // el audio del video no debe despertar a Monki ("hey monki" sigue funcionando)
+        if (::caption.isInitialized) caption.text = "▶ $title"
+        youtubeId = id; youtubeTitle = title
+        startYoutubeBar()
+        // El ánimo del video tiñe la cara, los widgets y los botones mientras está abierto
+        scope.launch {
+            val animo = classifyMood("Video de YouTube: \"$title\"") ?: return@launch
+            if (youtubeView == null) return@launch
+            videoMood = animo
+            android.util.Log.i("Asistente", "Ánimo del video \"$title\": ${animo.tag}")
+            refreshFace()
+        }
+    }
+
+    private var youtubeResults: List<Pair<String, String>> = emptyList()
+    private var youtubeId = ""
+    private var youtubeTitle = ""
+    private var youtubeTicker: Job? = null
+    /** Salida pedida al buscar el video (true bocina, false consola, null = la del botón de arriba). */
+    private var youtubeTarget: Boolean? = null
+
+    /** Resultados de YouTube con miniatura y título, en el lugar de la cara; tocar uno lo reproduce. */
+    private fun showYoutubeResults(results: List<Pair<String, String>>) {
+        if (panel == null) showPanel()
+        hideDetail(); closeYoutube()
+        youtubeResults = results
+        val accent = moodColor()
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        list.addView(TextView(this).apply {
+            text = "▶ Elige un video"; setTextColor(accent); typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); setPadding(dp(4), 0, 0, dp(4))
+        })
+        var first: View? = null
+        for ((id, title) in results) {
+            val thumb = android.widget.ImageView(this).apply {
+                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#2A332F")) }
+                clipToOutline = true
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(4), dp(4))
+                background = buttonBackground(Color.TRANSPARENT, inset = 1)
+                isFocusable = true; isClickable = true
+                setOnClickListener { playYoutubeOn(youtubeTarget ?: audioOnSpeaker(), id, title) }
+                addView(thumb, LinearLayout.LayoutParams(dp(80), dp(45)))
+                addView(TextView(this@AgentService).apply {
+                    text = title; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                    setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setPadding(dp(8), 0, 0, 0)
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+            list.addView(row)
+            if (first == null) first = row
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching { java.net.URL("https://i.ytimg.com/vi/$id/mqdefault.jpg").openStream().use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
+                }?.let { thumb.setImageBitmap(it) }
+            }
+        }
+        youtubeBox.removeAllViews()
+        youtubeBox.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat(); setColor(blend(accent, Color.parseColor("#18201D"), 0.88f)); setStroke(dp(1), accent)
+        }
+        youtubeBox.addView(ScrollView(this).apply { addView(list) }, android.widget.FrameLayout.LayoutParams(-1, -1))
+        youtubeBox.visibility = View.VISIBLE
+        faceView.visibility = View.INVISIBLE
+        first?.requestFocus()
+    }
+
+    /** El video no se puede ver dentro de Monki (su dueño lo prohíbe): aviso y de vuelta a la lista. */
+    private fun onYoutubeError(code: Int) {
+        android.util.Log.w("Asistente", "YouTube error $code")
+        val results = youtubeResults
+        if (results.isEmpty()) { closeYoutube(); return }
+        showYoutubeResults(results)
+        if (::caption.isInitialized) caption.text = "Ese video no se puede ver dentro de Monki; elige otro."
+    }
+
+    /** Pone el audio donde se pidió (conectando o soltando el Echo si hace falta) y arranca el video. */
+    private fun playYoutubeOn(speaker: Boolean, id: String, title: String) {
+        scope.launch {
+            if (audioOnSpeaker() != speaker) {
+                if (::caption.isInitialized) caption.text = if (speaker) "🔊 Conectando la bocina…" else "📺 Regresando el sonido a la consola…"
+                setAudioOutput(speaker)
+            }
+            showYoutube(id, title)
+            if (::caption.isInitialized) caption.text = "▶ $title · ${if (audioOnSpeaker()) "🔊 en la bocina" else "📺 en la consola"}"
+        }
+    }
+
+    /** Estado del video de YouTube: 1 reproduciendo, 2 pausa, -1 sin video o desconocido. */
+    private suspend fun youtubeState(): Int {
+        val web = youtubeView ?: return -1
+        val r = kotlinx.coroutines.CompletableDeferred<Int>()
+        withContext(Dispatchers.Main) { web.evaluateJavascript("window.ytState") { v -> r.complete(v?.trim('"')?.toIntOrNull() ?: -1) } }
+        return kotlinx.coroutines.withTimeoutOrNull(1500) { r.await() } ?: -1
+    }
+
+    private suspend fun youtubePlay() {
+        withContext(Dispatchers.Main) { youtubeView?.evaluateJavascript("cmd('playVideo')", null) }
+    }
+
+    /** Una sola cosa sonando a la vez: si Spotify va a sonar en la consola, el video se pausa. */
+    private suspend fun youtubePause() {
+        withContext(Dispatchers.Main) { youtubeView?.evaluateJavascript("cmd('pauseVideo')", null) }
+    }
+
+    /**
+     * Con un video abierto, el reproductor de abajo controla el video: miniatura, título, avance, pausa, ±10 s y la
+     * barra para adelantar o regresar. Lee el estado del reproductor de YouTube cada segundo.
+     */
+    private fun startYoutubeBar() {
+        youtubeTicker?.cancel()
+        musicArtUrl = ""
+        youtubeTicker = scope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { java.net.URL("https://i.ytimg.com/vi/$youtubeId/mqdefault.jpg").openStream().use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
+            }?.let { bmp -> if (::musicArt.isInitialized) { musicArt.setImageBitmap(bmp); musicTint = averageColor(bmp); musicBar.background = musicBackground() } }
+            while (youtubeView != null) {
+                val web = youtubeView ?: break
+                val raw = kotlinx.coroutines.CompletableDeferred<String?>()
+                web.evaluateJavascript("JSON.stringify({s: window.ytState, t: window.ytInfo.t, d: window.ytInfo.d, title: window.ytInfo.title})") { raw.complete(it) }
+                val j = kotlinx.coroutines.withTimeoutOrNull(1500) { raw.await() }
+                    ?.let { runCatching { org.json.JSONObject(org.json.JSONTokener(it).nextValue() as String) }.getOrNull() }
+                if (j != null && ::musicBar.isInitialized && !typing) {
+                    musicSource = "youtube"
+                    musicPlaying = j.optInt("s") == 1
+                    musicPlay.text = if (musicPlaying) "⏸" else "▶"
+                    musicLen = (j.optDouble("d", 0.0) * 1000).toLong()
+                    if (!musicSeeking) { musicPos = (j.optDouble("t", 0.0) * 1000).toLong(); musicPosAt = System.currentTimeMillis() }
+                    val title = j.optString("title").ifBlank { youtubeTitle }
+                    val t = android.text.SpannableString("$title\nYouTube")
+                    t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
+                    t.setSpan(android.text.style.AbsoluteSizeSpan(16, true), 0, title.length, 0)
+                    t.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#C9D2CE")), title.length + 1, t.length, 0)
+                    t.setSpan(android.text.style.AbsoluteSizeSpan(12, true), title.length + 1, t.length, 0)
+                    musicText.text = t
+                    musicBar.visibility = View.VISIBLE
+                    drawMusicProgress()
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    private fun closeYoutube() {
+        youtubeTicker?.cancel(); youtubeTicker = null
+        if (musicSource == "youtube") { musicSource = ""; musicArtUrl = ""; musicAt = 0L }
+        youtubeView?.apply { loadUrl("about:blank"); destroy() }
+        if (youtubeView != null) wake.strict = false
+        youtubeView = null
+        if (videoMood != null) { videoMood = null; refreshFace() }
+        if (!::youtubeBox.isInitialized) return
+        youtubeBox.removeAllViews()
+        youtubeBox.visibility = View.GONE
+        if (::faceRow.isInitialized && faceRow.visibility == View.VISIBLE) faceView.visibility = View.VISIBLE
+    }
+
     /** Herramientas para que Monki cambie su cara por voz. */
     private fun faceTools() = listOf(
+        Tool("audio.salida", "Elige por dónde suena el audio de la consola (videos de YouTube, juegos): \"consola\" (su bocina) o " +
+            "\"bocina\" (el Echo por Bluetooth; debe estar emparejado una vez). La voz de Monki siempre sale por la consola.",
+            schema("destino" to prop("string", "consola | bocina"), required = listOf("destino"))) {
+            ToolResult(setAudioOutput(it.optString("destino").contains("bocina")))
+        },
+        Tool("audio.emparejar", "Empareja la consola con el Echo por Bluetooth (una sola vez) para poder usarlo como bocina.") {
+            ToolResult(pairWithEcho())
+        },
+        Tool("youtube.reproducir", "Busca un video en YouTube y lo reproduce en miniatura en la pantalla de la consola (no en la tele). " +
+            "\"donde\": \"consola\" o \"bocina\" solo si el usuario lo dijo; si no, vacío (suena donde esté elegido).",
+            schema("consulta" to prop("string", "qué video buscar"), "donde" to prop("string", "consola | bocina | vacío"),
+                required = listOf("consulta"))) {
+            val found = withContext(Dispatchers.IO) { runCatching { Web.youtubeSearch(it.optString("consulta")) }.getOrDefault(emptyList()) }
+            if (found.isEmpty()) return@Tool ToolResult("No encontré videos para eso.")
+            val donde = it.optString("donde").lowercase()
+            youtubeTarget = when { donde.contains("bocina") -> true; donde.contains("consola") -> false; else -> null }
+            // Se muestran los resultados para que el usuario elija (tocar uno lo reproduce)
+            withContext(Dispatchers.Main) { showYoutubeResults(found) }
+            ToolResult("Listo: ${found.size} videos en pantalla; el usuario elige tocando uno. No hagas nada más (no abras apps ni toques " +
+                "la pantalla); responde en una frase que elija su video.")
+        },
+        Tool("youtube.cerrar", "Cierra el video de YouTube de la pantalla.") {
+            withContext(Dispatchers.Main) { closeYoutube() }; ToolResult("Video cerrado.")
+        },
         Tool("cara.color", "Cambia el color de tu cara en la pantalla. Colores: ${FaceColors.names.keys.joinToString()}, " +
             "un #RRGGBB, o \"ánimo\" para que cambie con tu estado de ánimo.",
             schema("color" to prop("string", "nombre, #RRGGBB o ánimo"), required = listOf("color"))) {
@@ -869,6 +1524,9 @@ class AgentService : AccessibilityService(), Controls {
             // Como en xiaozhi: hablar mientras el asistente habla lo interrumpe
             speakJob?.cancel(); stopVoice()
             wake.stop()
+            // Seguimiento: corto (espera 4 s a que hables y graba máximo 10 s); pedido normal: hasta 30 s
+            recorder.waitSeconds = if (followUp) 4 else 8
+            recorder.maxSeconds = if (followUp) 10 else 30
             if (recorder.start()) {
                 micButton.text = "⏹ Listo (X)"; setState(State.LISTENING)
                 scope.launch {
@@ -1131,25 +1789,39 @@ class AgentService : AccessibilityService(), Controls {
                     }
                     pcCards[c.alias] = pcCard(c.alias, raw)
                 }
-                musicClient()?.let { c ->
-                    withContext(Dispatchers.IO) { runCatching { org.json.JSONArray(c.call("alexa_alarmas", org.json.JSONObject()).text) }.getOrNull() }
-                        ?.let { echoAlarms = it }
-                }
+                if (echoAvailable()) echoCall("alexa_alarmas")?.let { r -> runCatching { org.json.JSONArray(r) }.getOrNull() }?.let { echoAlarms = it }
                 drawWidgets()
             }
         }
         drawWidgets()
     }
 
-    /** El hub que tiene Alexa (alexa_reproduciendo), si hay. */
+    /** El hub que tiene Alexa (alexa_reproduciendo), si hay. Solo respaldo: el puente de Alexa vive en la consola. */
     private fun musicClient() = remoteClients.firstOrNull { c -> c.tools.any { it.optString("name") == "alexa_reproduciendo" } }
 
+    private val alexa by lazy { AlexaClient(prefs) }
+
+    /** ¿Hay forma de hablar con el Echo? (puente en la consola o, de respaldo, el de casa). */
+    private fun echoAvailable() = alexa.configured || musicClient() != null
+
+    /** Herramienta del Echo: el puente de la consola primero; si falla o no está, el de casa. null si nada respondió. */
+    private suspend fun echoCall(tool: String, args: org.json.JSONObject = org.json.JSONObject()): String? = withContext(Dispatchers.IO) {
+        (if (alexa.configured) runCatching { alexa.call(tool, args) }.onFailure { android.util.Log.w("Asistente", "Alexa local $tool: ${it.message}") }.getOrNull() else null)
+            ?: musicClient()?.let { c -> runCatching { c.call(tool, args).text }.getOrNull() }
+    }
+
     private fun refreshMusic() {
-        val c = musicClient() ?: return
+        val c = musicClient()
+        if (youtubeView != null) return   // con un video abierto, el reproductor es del video
+        if (!echoAvailable() && !spotify.configured) return
         scope.launch {
+            // Spotify primero (ve la música en la consola y en el Echo); el puente de Alexa si Spotify no está o falla
             val info = withContext(Dispatchers.IO) {
-                runCatching { org.json.JSONObject(c.call("alexa_reproduciendo", org.json.JSONObject()).text) }.getOrNull()
+                (if (spotify.configured) runCatching { spotify.nowPlaying() ?: org.json.JSONObject().put("estado", "nada") }.getOrNull() else null)
+                    ?: echoCall("alexa_reproduciendo")?.let { r -> runCatching { org.json.JSONObject(r) }.getOrNull() }
             }
+            musicSource = info?.optString("fuente").orEmpty()
+            musicDeviceType = info?.optString("tipo_dispositivo").orEmpty()
             if (!::musicBar.isInitialized) return@launch
             val estado = info?.optString("estado").orEmpty()
             if (info == null || estado == "nada" || info.optString("titulo").isBlank()) {
@@ -1158,8 +1830,18 @@ class AgentService : AccessibilityService(), Controls {
                 return@launch
             }
             updateMusicMood(info)
+            // En pausa se queda 1 min (por si la reanudas) y luego se oculta
+            if (estado == "sonando") musicPausedSince = 0L else if (musicPausedSince == 0L) musicPausedSince = System.currentTimeMillis()
+            val stale = musicPausedSince != 0L && System.currentTimeMillis() - musicPausedSince > 60_000
+            if (stale) {
+                musicBar.visibility = View.GONE
+                if (musicMood != null) { musicMood = null; musicKey = ""; refreshFace() }
+                updateAudioButton()
+                return@launch
+            }
             if (!typing) musicBar.visibility = View.VISIBLE   // al escribir no tapa la conversación
             musicPlaying = estado == "sonando"
+            updateAudioButton()
             musicPlay.text = if (musicPlaying) "⏸" else "▶"
             musicPos = info.optLong("progreso"); musicLen = info.optLong("duracion"); musicPosAt = System.currentTimeMillis()
             musicList = info.optString("lista"); musicTrack = info.optString("cancion")
@@ -1179,7 +1861,7 @@ class AgentService : AccessibilityService(), Controls {
             if (url.isNotBlank() && (url != musicArtUrl || musicArt.drawable == null)) {
                 withContext(Dispatchers.IO) {
                     // Primero por el hub (el router no resuelve el servidor de imágenes de Spotify); si no, directo
-                    val bytes = runCatching { c.albumArt(url) }.getOrNull()
+                    val bytes = c?.let { runCatching { it.albumArt(url) }.getOrNull() }
                         ?: runCatching { java.net.URL(url).openStream().use { it.readBytes() } }
                             .onFailure { android.util.Log.w("Asistente", "Portada: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
                     bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
@@ -1245,18 +1927,23 @@ class AgentService : AccessibilityService(), Controls {
 
     /** Mueve la canción del Echo a esa posición (alexa_saltar del hub). */
     private fun seekMusic(posMs: Long) {
-        val c = musicClient()
         musicPos = posMs; musicPosAt = System.currentTimeMillis()
-        if (c == null) { musicSeeking = false; return }
+        if (musicSource == "youtube" && youtubeView != null) {
+            youtubeView?.evaluateJavascript("cmd('seekTo', [${posMs / 1000.0}, true])", null)
+            scope.launch { kotlinx.coroutines.delay(1200); musicSeeking = false }
+            return
+        }
+        if (!echoAvailable() && musicSource != "spotify") { musicSeeking = false; return }
         scope.launch {
-            withContext(Dispatchers.IO) { runCatching { c.call("alexa_saltar", org.json.JSONObject().put("segundo", posMs / 1000)) } }
+            if (musicSource == "spotify") withContext(Dispatchers.IO) { runCatching { spotify.seek(posMs) } }
+            else echoCall("alexa_saltar", org.json.JSONObject().put("segundo", posMs / 1000))
             musicSeeking = false
             kotlinx.coroutines.delay(1500); refreshMusic()
         }
     }
 
-    /** Color del ánimo actual (el de la canción si suena música): lo usan los widgets y el reproductor. */
-    private fun moodColor() = Color.parseColor((musicMood ?: currentMood()).color)
+    /** Color de todo Monki: el fijo si lo pediste; si no, el del ánimo (el de la canción si suena música). */
+    private fun moodColor() = FaceColors.parse(prefs.faceColor) ?: Color.parseColor((videoMood ?: musicMood ?: currentMood()).color)
 
     /** Al cambiar de canción, pregunta (a Groq, rápido y gratis) qué ánimo tiene; en pausa la cara vuelve a lo suyo. */
     private fun updateMusicMood(info: org.json.JSONObject) {
@@ -1268,28 +1955,43 @@ class AgentService : AccessibilityService(), Controls {
         val key = info.optString("titulo") + "|" + info.optString("artista")
         if (key == musicKey) return
         musicKey = key
-        val g = OpenAiCompat.groq(prefs) ?: return
         scope.launch {
-            val opciones = "emocionado, feliz, tranquilo, triste, molesto"
-            val r = withContext(Dispatchers.IO) {
-                runCatching {
-                    g.quick("Canción: \"${info.optString("titulo")}\" de ${info.optString("artista")} (álbum o lista: ${info.optString("album")}). " +
-                        "¿Qué ánimo transmite? Responde solo una palabra de: $opciones. " +
-                        "(fiesta o bailable = emocionado; alegre = feliz; relajante, lofi o instrumental suave = tranquilo; " +
-                        "balada triste o desamor = triste; rock pesado, metal o enojo = molesto)")
-                }.getOrNull()
-            }
-            if (musicKey != key) return@launch
-            musicMood = Animo.entries.firstOrNull { r?.lowercase()?.contains(it.tag) == true } ?: Animo.TRANQUILO
-            android.util.Log.i("Asistente", "Ánimo de la canción \"${info.optString("titulo")}\": ${musicMood?.tag} ($r)")
+            val animo = classifyMood("Canción: \"${info.optString("titulo")}\" de ${info.optString("artista")} (álbum o lista: ${info.optString("album")})")
+            if (musicKey != key || animo == null) return@launch
+            musicMood = animo
+            android.util.Log.i("Asistente", "Ánimo de la canción \"${info.optString("titulo")}\": ${animo.tag}")
             refreshFace()
         }
     }
 
+    /** Qué ánimo transmite una canción o un video, según su descripción (Groq, rápido y gratis). null si no se pudo. */
+    private suspend fun classifyMood(description: String): Animo? {
+        val g = OpenAiCompat.groq(prefs) ?: return null
+        val r = withContext(Dispatchers.IO) {
+            runCatching {
+                g.quick("$description. ¿Qué ánimo transmite? Responde solo una palabra de: emocionado, feliz, tranquilo, triste, molesto. " +
+                    "(fiesta o bailable = emocionado; alegre o divertido = feliz; relajante, lofi o instrumental suave = tranquilo; " +
+                    "balada triste, desamor o drama = triste; rock pesado, metal, enojo o terror = molesto)")
+            }.getOrNull()
+        } ?: return null
+        return Animo.entries.firstOrNull { r.lowercase().contains(it.tag) } ?: Animo.TRANQUILO
+    }
+
     private fun musicControl(accion: String) {
-        val c = musicClient() ?: return
+        if (musicSource == "youtube" && youtubeView != null) {
+            val js = when (accion) {
+                "play" -> "cmd('playVideo')"; "pausa" -> "cmd('pauseVideo')"
+                "siguiente" -> "cmd('seekTo', [Math.min(window.ytInfo.d, window.ytInfo.t + 10), true])"
+                else -> "cmd('seekTo', [Math.max(0, window.ytInfo.t - 10), true])"
+            }
+            youtubeView?.evaluateJavascript(js, null)
+            return
+        }
         scope.launch {
-            withContext(Dispatchers.IO) { runCatching { c.call("alexa_control", org.json.JSONObject().put("accion", accion)) } }
+            if (accion == "play" && musicDeviceType.equals("Smartphone", true)) youtubePause()
+            if (musicSource == "spotify") withContext(Dispatchers.IO) {
+                runCatching { when (accion) { "play" -> spotify.play(); "pausa" -> spotify.pause(); "siguiente" -> spotify.next(); "anterior" -> spotify.previous() } }
+            } else echoCall("alexa_control", org.json.JSONObject().put("accion", accion))
             kotlinx.coroutines.delay(1500); refreshMusic()
         }
     }
@@ -1335,7 +2037,10 @@ class AgentService : AccessibilityService(), Controls {
     private fun showDetail(title: String, body: String) {
         if (!::detailView.isInitialized) return
         val accent = moodColor()
-        val t = android.text.SpannableString("$title\n\n$body")
+        val hint = "Toca aquí o presiona B para volver"
+        val t = android.text.SpannableString("$title\n\n$body\n\n$hint")
+        t.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#7D8A84")), t.length - hint.length, t.length, 0)
+        t.setSpan(android.text.style.AbsoluteSizeSpan(11, true), t.length - hint.length, t.length, 0)
         t.setSpan(android.text.style.ForegroundColorSpan(accent), 0, title.length, 0)
         t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
         t.setSpan(android.text.style.AbsoluteSizeSpan(17, true), 0, title.length, 0)
@@ -1346,13 +2051,11 @@ class AgentService : AccessibilityService(), Controls {
         detailView.visibility = View.VISIBLE
         queueScroll.visibility = View.GONE
         faceView.visibility = View.INVISIBLE
-        detailJob?.cancel()
-        detailJob = scope.launch { kotlinx.coroutines.delay(20_000); hideDetail() }
+        restartDetailTimer(10_000)
     }
 
     /** Lista de canciones de lo que suena (spotify_lista del hub). Tocar una se la pide al Echo. */
     private fun showQueue() {
-        val c = musicClient() ?: return
         if (musicList.isBlank()) { showDetail("🎵 Lista", "Esta música no viene de una lista de Spotify."); return }
         val accent = moodColor()
         queueList.removeAllViews()
@@ -1366,7 +2069,7 @@ class AgentService : AccessibilityService(), Controls {
         restartDetailTimer(30_000)
         scope.launch {
             val j = withContext(Dispatchers.IO) {
-                runCatching { org.json.JSONObject(c.call("spotify_lista", org.json.JSONObject().put("lista", musicList)).text) }.getOrNull()
+                runCatching { Spotify.playlist(musicList) }.getOrNull()
             }
             val songs = j?.optJSONArray("canciones")
             queueList.removeAllViews()
@@ -1395,7 +2098,11 @@ class AgentService : AccessibilityService(), Controls {
                     setOnClickListener {
                         restartDetailTimer(30_000)
                         scope.launch {
-                            withContext(Dispatchers.IO) { runCatching { c.call("alexa_comando", org.json.JSONObject().put("texto", "pon $t de $a en Spotify")) } }
+                            // Con Spotify Connect se toca dentro de la misma lista; si no, se le pide al Echo
+                            val ok = spotify.configured && withContext(Dispatchers.IO) {
+                                runCatching { spotify.playInContext(musicList, s.optString("uri")) }.isSuccess
+                            }
+                            if (!ok) echoCall("alexa_comando", org.json.JSONObject().put("texto", "pon $t de $a en Spotify"))
                             caption.text = "🎵 $t"
                             kotlinx.coroutines.delay(4000); refreshMusic()
                         }

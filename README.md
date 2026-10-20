@@ -1,138 +1,188 @@
+<div align="center">
+
 # Monki
 
-**Asistente de voz con cara, estilo mayordomo IA, para la consola Anbernic RG353V (Android 11).**
-Lo despiertas con *"hey monki"*, te entiende en español y actúa: contesta lo que sea, busca en internet, maneja la consola, controla tu Mac y tu PC con Windows, pone música en los Echo de la casa y te enseña en pantalla lo que está sonando.
+### Asistente de voz con cara para la consola Anbernic RG353V
 
-Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monki pasa sola a la siguiente, y si no queda ninguna (o no hay internet) responde con un modelo que corre **dentro de la consola**.
+Lo despiertas con *"hey monki"*, te entiende en español y **actúa**: contesta, busca en internet, maneja la consola,
+controla tu Mac y tu PC, pone música y alarmas en el Echo y reproduce YouTube en su propia pantalla.
 
-> **Estado:** en desarrollo activo. Se usa a diario en una consola real; lo que falta está en [Pendientes](docs/pendientes.md).
+![Android 11](https://img.shields.io/badge/Android-11-3DDC84?logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-app-7F52FF?logo=kotlin&logoColor=white)
+![Python](https://img.shields.io/badge/Python-hub%20MCP-3776AB?logo=python&logoColor=white)
+![llama.cpp](https://img.shields.io/badge/llama.cpp-modelo%20local-black)
+![Costo](https://img.shields.io/badge/costo-%240-brightgreen)
+![Licencia MIT](https://img.shields.io/badge/licencia-MIT-blue)
 
-<p align="center">
-  <img src="docs/imagenes/monki-hablando.png" width="640" alt="Monki hablando en la pantalla de la consola: ojos, boca abierta, widgets de hora, clima, alarma y computadora">
-</p>
+<img src="docs/imagenes/monki-hablando.png" width="640" alt="Monki hablando en la pantalla de la consola: ojos, boca abierta y widgets de hora, clima, alarma y computadora">
+
+[Funciones](#funciones) ·
+[Galería](#galería) ·
+[Cómo funciona](#cómo-funciona) ·
+[Instalación](#instalación) ·
+[Uso](#uso) ·
+[Documentación](#documentación)
+
+</div>
 
 ---
 
-## Lo que hace
+## Por qué Monki
+
+- **100 % gratis.** Encadena APIs gratuitas (Groq → NVIDIA → OpenRouter → Gemini) y, si todas se agotan o no hay
+  internet, contesta con un modelo que corre **dentro de la consola**.
+- **No depende de una computadora.** El control del Echo y de Spotify vive dentro de la app: con la Mac apagada sigue
+  funcionando todo.
+- **Tiene personalidad.** Cara animada con boca que sigue la voz, ánimo que cambia con la conversación, la hora, la
+  batería, la canción o el video que suena, y un solo color que tiñe toda la interfaz.
+- **Pensado para un control de juego.** Todo se usa con la cruceta y los botones, o tocando la pantalla.
+
+> **Estado:** en desarrollo activo y en uso diario en una consola real. Lo que falta está en
+> [Pendientes](docs/pendientes.md).
+
+---
+
+## Funciones
 
 | Área | Qué puedes pedirle |
 |---|---|
 | **Conversar** | Cualquier pregunta, en 1 o 2 frases directas. Personalidad de mayordomo con humor seco |
-| **Internet** | Búsquedas (DuckDuckGo), leer páginas, clima (wttr.in). Sin gastar cuota de IA |
-| **Alarmas en el Echo** | "Pon una alarma mañana a las 7 con Bad Bunny": queda en tu Echo y suena con esa música de Spotify. También las lista y las quita |
-| **Tiempo y memoria** | Temporizadores y recordatorios en la consola; recuerda tus datos entre conversaciones |
-| **Rutinas** | Frases que hacen varias cosas ("buenas noches"). Se crean y se borran hablando |
-| **La consola** | Ve la pantalla, toca, desliza, abre apps y juegos, escribe, volumen, brillo, batería |
-| **Mac y Windows** (vía `casa`) | Estado (CPU, RAM, disco, batería), captura, abrir y cerrar apps, teclado y mouse, portapapeles, buscar y abrir archivos, brillo, silencio, bloquear, dormir, reiniciar o apagar (con confirmación), música, avisos |
-| **Teles y celulares** (vía `casa`) | Chromecast y YouTube, celulares Android por adb, Wake-on-LAN |
-| **Música en los Echo** (vía `casa`) | "Pon música relajante en Spotify", pausa, siguiente, volumen, adelantar. No hace falta decir "Alexa" |
+| **Internet** | Búsquedas (DuckDuckGo), leer páginas y clima (wttr.in), sin gastar cuota de IA |
+| **Música** | *"Pon música relajante en Spotify"*, pausa, siguiente, volumen, adelantar. Suena en el Echo o en la consola |
+| **YouTube** | *"Pon en YouTube…"*: lista con miniaturas para elegir y reproductor en el lugar de la cara |
+| **Alarmas en el Echo** | *"Pon una alarma mañana a las 7 con Metallica"*: queda en el Echo y suena con esa música de Spotify |
+| **Tiempo y memoria** | Temporizadores, recordatorios y datos tuyos que recuerda entre conversaciones |
+| **Rutinas** | Frases que hacen varias cosas (*"buenas noches"*). Se crean y se borran hablando |
+| **La consola** | Ve la pantalla, toca, desliza, abre apps y juegos, escribe, volumen, brillo y batería |
+| **Mac y Windows** (vía `casa`) | Estado, captura, apps, teclado y mouse, portapapeles, archivos, brillo, bloquear, dormir y apagar (con confirmación) |
+| **Teles y celulares** (vía `casa`) | Chromecast y YouTube en la tele, celulares Android por adb, Wake-on-LAN |
 
 ### La cara
 
-- **Ojos y boca animados** con 20 expresiones. La boca se mueve con el volumen real de la voz.
-- **Estado de ánimo** que dura entre conversaciones: sube con respuestas alegres, baja con tristes, se cansa de noche o con poca batería y se aburre si no le hablas.
-- **Color configurable** por voz ("ponte azul"), en ajustes, o *según su ánimo*.
-- **Ánimo según la música:** cuando cambia la canción, decide si es bailable, alegre, tranquila, triste o pesada; la cara toma ese ánimo y su color, y se mece si la canción es alegre.
+- **Ojos y boca animados** con 20 expresiones; la boca se mueve con el volumen real de la voz.
+- **Se siente viva:** respira, tiene destello en los ojos, rebota al cambiar de expresión, parpadea doble, muestra
+  puntitos al pensar y "z" al dormir.
+- **Ánimo persistente:** sube con respuestas alegres, baja con tristes, se cansa de noche o con poca batería y se aburre
+  si no le hablas.
+- **Ánimo de lo que suena:** al cambiar la canción o abrir un video, decide si es bailable, alegre, tranquilo, triste o
+  pesado. La cara, los widgets, los botones y el reproductor toman ese color.
 
 <p align="center">
   <img src="docs/imagenes/monki-animos.png" alt="Seis ánimos de Monki con su color: feliz, emocionado, triste, molesto, cansado y aburrido">
-  <br><sub>Feliz, emocionado, triste, molesto, cansado y aburrido, con el color "según su ánimo".</sub>
+  <br><sub>Feliz, emocionado, triste, molesto, cansado y aburrido.</sub>
 </p>
 
 ### La pantalla
 
-<p align="center">
-  <img src="docs/imagenes/monki-pantalla.png" width="640" alt="Pantalla de Monki: cara, widgets de hora, clima, alarma y computadora, y el reproductor con portada y barra de avance">
-</p>
+- **Widgets** a los lados de la cara: hora, clima, próxima alarma del Echo y cada computadora conectada (modelo,
+  batería, disco, CPU, RAM). Tócalos (o elígelos con la cruceta y A) para ver el detalle; regresa solo a la cara en 10 s.
+- **Reproductor** con portada, fondo del color de la portada, **barra que se arrastra** para adelantar o regresar y
+  botones ⏮ ⏯ ⏭. Aparece cuando suena Spotify en la consola o en el Echo y se oculta tras un minuto en pausa.
+  Tócalo para ver la lista de canciones y elegir otra.
+- **Con un video abierto, el reproductor controla el video:** ⏯ pausa, ⏮ ⏭ saltan 10 s y la barra recorre el video.
+- **Una sola cosa suena a la vez:** abrir un video pausa Spotify, y darle play a Spotify en la consola pausa el video.
+- **Pantalla completa**, sin las barras de Android, y botones en forma de píldora.
 
-- **Widgets** a los lados de la cara: hora y fecha, clima, próxima alarma (del Echo, con su música) y cada computadora conectada con su modelo, batería, disco, CPU y RAM. **Toman el color del ánimo.**
-- **Toca un widget** (o selecciónalo con la cruceta y presiona A) y su detalle aparece en el lugar de la cara: estado de la consola, clima y pronóstico, todas las alarmas o la información completa de la computadora.
-- **Reproductor:** si suena algo en un Echo aparece con la portada, el fondo del color de la portada, la canción, una **barra de avance que puedes arrastrar** (o mover con la cruceta) para adelantar o regresar, y botones redondos ⏮ ⏯ ⏭.
-- **Botones de volumen de la consola:** con el panel abierto y música sonando, suben y bajan el volumen del Echo.
-- **Toca el reproductor** y aparece la lista de canciones de lo que suena, con la actual marcada; toca otra y se la pide al Echo.
-- Botones en forma de píldora; al escribir con el teclado aparece **"← Volver"**.
-
-<p align="center">
-  <img src="docs/imagenes/monki-lista.png" width="420" alt="Lista de canciones de la lista que suena, con la canción actual marcada">
-  <img src="docs/imagenes/monki-detalle.png" width="420" alt="Detalle de la computadora al tocar su widget: CPU, RAM, disco, batería y tiempo encendida">
-</p>
+### Por dónde suena
 
 <p align="center">
-  <img src="docs/imagenes/monki-reproductor.png" width="620" alt="Barra del reproductor con la portada, la canción y los botones anterior, pausa y siguiente">
+  <img src="docs/imagenes/monki-botones.png" alt="Botones de arriba: salida de audio, historial, YouTube, nueva conversación y cerrar">
 </p>
+
+- El botón **📺 Consola / 🔊 Bocina** cambia la salida de audio de un toque. La música o el video que suena **sigue sin
+  cortarse**: Spotify se pasa al otro equipo por Spotify Connect y el audio de la consola va al Echo por Bluetooth.
+- **Botones de volumen de la consola:** controlan el equipo donde suena (Echo o consola) y muestran en pantalla a dónde
+  fue y el nivel.
 
 ---
 
-## Cerebro: varias IA gratis en cadena
+## Galería
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/imagenes/monki-pantalla.png" alt="Pantalla principal con cara, widgets y reproductor de Spotify"></td>
+    <td width="50%"><img src="docs/imagenes/monki-youtube-lista.png" alt="Lista de videos de YouTube con miniaturas para elegir"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Pantalla principal:</b> cara, widgets y reproductor de Spotify.</sub></td>
+    <td align="center"><sub><b>YouTube:</b> eliges el video tocándolo.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/imagenes/monki-youtube.png" alt="Video de YouTube reproduciéndose; la interfaz tomó el color rojo del ánimo del video y el reproductor controla el video"></td>
+    <td><img src="docs/imagenes/monki-detalle.png" alt="Detalle de la computadora al tocar su widget: CPU, RAM, disco, batería y tiempo encendida"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Video:</b> la interfaz toma el color de su ánimo y el reproductor lo controla.</sub></td>
+    <td align="center"><sub><b>Detalle de un widget:</b> la computadora con CPU, RAM y disco.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/imagenes/monki-lista.png" width="420" alt="Lista de canciones de lo que suena, con la canción actual marcada"><br><sub><b>Lista de canciones</b> de lo que suena; toca una para ponerla.</sub></td>
+  </tr>
+</table>
+
+---
+
+## Cómo funciona
+
+### Cerebro: varias IA gratis en cadena
 
 ```
 pedido ─► Groq ──► NVIDIA ──► OpenRouter ──► Gemini ──► modelo local (en la consola)
           rápido   más cupo   emergencia     ve imágenes  sin internet ni límites
 ```
 
-- **Groq** (`gpt-oss-120b`, `qwen3.8-27b`, `gpt-oss-20b`) contesta primero: ~1.5 s.
-- **Gemini** va primero solo cuando Monki necesita *ver* la pantalla (es el único que entiende imágenes).
-- Si un proveedor responde 429, 413, 404, 410 o tarda de más, pasa al siguiente modelo y luego al siguiente proveedor.
-- **Modelo local:** Qwen2.5-0.5B con [llama.cpp](https://github.com/ggml-org/llama.cpp) compilado dentro de la app. Conversa sin internet (~8 s por respuesta), pero no usa herramientas.
+- **Groq** (`gpt-oss-120b`, `qwen3.8-27b`, `gpt-oss-20b`) contesta primero en ~1.5 s.
+- **Gemini** va primero solo cuando Monki necesita *ver* la pantalla.
+- Ante 429, 413, 404, 410 o demora, pasa al siguiente modelo y luego al siguiente proveedor.
+- **Modelo local:** Qwen2.5-0.5B con [llama.cpp](https://github.com/ggml-org/llama.cpp) compilado en la app. Conversa sin
+  internet (~8 s por respuesta), sin herramientas.
+- **Oído:** Vosk sin internet para *"hey monki"* y Whisper de Groq (~1 s) para entender el pedido.
 
-Para entender tu voz usa **Whisper** de Groq (~1 s), con Gemini de respaldo.
-
-### ¿Y si la computadora está apagada?
-
-Monki vive en la consola y **no depende de la Mac** para lo esencial:
-
-| Funciona sin la Mac | Necesita `casa` encendido |
-|---|---|
-| "Hey monki", respuestas (Groq, NVIDIA, Gemini o el modelo local), internet, clima | Voz de Edge (se usa Gemini o la voz sin internet) |
-| Voz con Gemini o Piper sin internet | Música, alarmas y volumen de los Echo |
-| Temporizadores, recordatorios, rutinas, memoria | Portadas y lista de canciones |
-| Cara, ánimo, widgets de hora y clima, control de la consola | Control de la computadora |
-
-Si `casa` no responde, Monki deja de intentar su voz durante 2 minutos para no hacerte esperar.
-
-## Voz
+### Voz
 
 ```
 Edge (es-MX, generada en la Mac) ─► Gemini TTS ─► Piper sin internet (en la consola)
            ~1.5 s                                          ~3.5 s
 ```
 
-- La voz neuronal de Microsoft Edge la genera el hub `casa` y la consola solo la reproduce.
-- **Pronunciaciones** configurables para nombres que la voz lee mal (`Oscar=Óscar`).
-- Monki **nunca dice "Alexa"** en voz alta (la cambia por "la bocina"), para no despertar los Echo de la casa.
+Monki **nunca dice "Alexa"** en voz alta (la cambia por "la bocina") para no despertar los Echo. Las pronunciaciones de
+nombres se configuran (`Oscar=Óscar`).
 
----
-
-## Cómo está armado
+### Arquitectura
 
 ```
               "hey monki"
                    │
-┌──────────────────▼───────────────────────────┐        ┌────────────────────────────────┐
-│ Consola RG353V  (asistente-apk, Kotlin)      │  MCP   │ Mac o Windows  (casa, Python)  │
-│                                              │ ─────► │                                │
-│ Vosk (sin internet) → "hey monki"            │  HTTP  │ casa.py  servidor MCP :8800    │
-│ Groq / NVIDIA / Gemini → piensa y usa tools  │ +clave │  ├─ computadora, red, teles    │
-│ llama.cpp (Qwen 0.5B) → último respaldo      │        │  ├─ POST /voz  (voz Edge)      │
-│ Edge / Gemini / Piper → voz                  │ ◄───── │  └─ alexa/alexa.js :8801 ──────┼──► Echos
-│ Accesibilidad → ve y toca la pantalla        │  voz   │     (solo 127.0.0.1)           │
-└──────────────────────────────────────────────┘        └────────────────────────────────┘
+┌──────────────────▼────────────────────────────┐        ┌────────────────────────────────┐
+│ Consola RG353V  (asistente-apk, Kotlin)       │  MCP   │ Mac o Windows  (casa, Python)  │
+│                                               │ ─────► │   opcional                     │
+│ Vosk → "hey monki"                            │  HTTP  │ casa.py  servidor MCP :8800    │
+│ Groq / NVIDIA / Gemini → piensa y usa tools   │ +clave │  ├─ computadora, red, teles    │
+│ llama.cpp (Qwen 0.5B) → último respaldo       │        │  └─ POST /voz  (voz Edge)      │
+│ Edge / Gemini / Piper → voz                   │ ◄───── │                                │
+│ AlexaClient → Echo (música, alarmas, volumen) │  voz   └────────────────────────────────┘
+│ Spotify Web API → reproductor y Connect       │
+│ WebView → YouTube en miniatura                │ ─────► Echo · Spotify · YouTube
+│ Accesibilidad → ve y toca la pantalla         │
+└───────────────────────────────────────────────┘
 ```
 
-| Carpeta | Qué es |
+### Sin la computadora
+
+| Funciona solo con la consola | Necesita `casa` encendido |
 |---|---|
-| [`asistente-apk/`](asistente-apk) | App Android en Kotlin: Monki en la consola (incluye llama.cpp como submódulo) |
-| [`casa/`](casa) | Hub MCP en Python (FastMCP) para Mac o Windows, voz Edge y puente de Alexa en Node |
-| [`agente/`](agente) | Versión de escritorio: el agente corre en la Mac y maneja la consola por adb |
-| [`herramientas/`](herramientas) | Descarga del modelo Vosk y scripts para analizar el reconocimiento de voz |
-| [`configuracion/`](configuracion) | Plantillas de LaunchAgent (macOS) y controles de PPSSPP |
-| [`docs/`](docs) | [Arquitectura](docs/arquitectura.md), [configuración](docs/configuracion.md), [problemas conocidos](docs/problemas-conocidos.md), [pendientes](docs/pendientes.md) |
+| "Hey monki", respuestas (Groq, NVIDIA, Gemini o local), internet, clima | Control de la Mac o la PC |
+| Echo: música, alarmas con Spotify, volumen, adelantar, Bluetooth | Voz de Edge (sin ella usa Gemini o Piper) |
+| Spotify: reproductor, lista de canciones, pasar la música entre equipos | Chromecast y celulares |
+| YouTube, cara, ánimo, widgets, temporizadores, rutinas, memoria | |
 
 ---
 
 ## Instalación
 
-**Necesitas:** una consola Android 11 con depuración USB (probado en RG353V), una Mac con Homebrew (o una PC con Windows para `casa`) y claves **gratis** de [Groq](https://console.groq.com/keys), [NVIDIA](https://build.nvidia.com) y/o [Gemini](https://aistudio.google.com/apikey). Con una basta; con varias, Monki casi nunca se queda sin respuesta.
+**Necesitas:** una consola Android 11 con depuración USB (probado en RG353V), una Mac con Homebrew y al menos una clave
+**gratis** de [Groq](https://console.groq.com/keys), [NVIDIA](https://build.nvidia.com) o
+[Gemini](https://aistudio.google.com/apikey). Con varias, Monki casi nunca se queda sin respuesta.
 
 ### 1. App en la consola
 
@@ -159,7 +209,7 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity \
 
 En la consola: **Ajustes → Accesibilidad → Monki → activar**, y dale permiso de micrófono.
 
-### 2. Modelo local (opcional, recomendado)
+### 2. Modelo local (recomendado)
 
 ```bash
 curl -L -o qwen.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf
@@ -168,73 +218,108 @@ adb shell "run-as com.limber.asistente sh -c 'mkdir -p files && cp /data/local/t
 adb shell rm /data/local/tmp/llm.gguf
 ```
 
-### 3. Voz sin internet (opcional)
+### 3. Spotify (opcional)
 
-Instala el motor [sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/tts/apk-engine.html) con la voz `es_MX-ald-medium` (arm64) y ponlo como motor del sistema.
+Crea una app gratis en el [panel de Spotify](https://developer.spotify.com/dashboard) con la Redirect URI
+`http://127.0.0.1:8899/callback` y autoriza una vez (PKCE, sin *client secret*):
 
-### 4. Hub `casa` en la computadora (opcional)
+```bash
+python3 herramientas/spotify-autorizar.py TU_CLIENT_ID
+```
+
+### 4. Echo de Alexa (opcional, no oficial)
+
+Inicia sesión una vez con el puente y copia la sesión a la consola; después la Mac ya no hace falta:
+
+```bash
+cd casa/alexa && npm install && node alexa.js     # abre http://127.0.0.1:3456 e inicia sesión en Amazon
+python3 herramientas/alexa-a-consola.py "Nombre de tu Echo"
+```
+
+Para el botón **🔊 Bocina**, empareja una vez: *"hey monki, empareja la consola con el Echo"*. Usa la API no oficial de
+Amazon (la misma de [alexa-remote2](https://github.com/Apollon77/alexa-remote)) y puede dejar de funcionar si Amazon
+cambia algo.
+
+### 5. Hub `casa` en la computadora (opcional)
 
 ```bash
 cd casa
 uv run casa.py      # la primera vez crea .env con CASA_TOKEN
-```
-
-- **macOS:** arranque automático con la plantilla `configuracion/launchd/com.limber.casa.plist` (lanza el Python del `.venv` directamente; con `uv run` en medio, al reiniciar quedaba un proceso viejo con el puerto ocupado). Para que Monki use el teclado y el mouse, da permiso de *Accesibilidad* a `uv`/`python`.
-- **Windows:** `powershell -ExecutionPolicy Bypass -File .\instalar-windows.ps1` como administrador; al final imprime la línea para la consola.
-
-Conecta Monki al hub:
-
-```bash
 adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es mcp_servers 'casa|http://IP_DE_LA_MAC:8800/mcp|CASA_TOKEN'"
 ```
 
-### 5. Echo de Alexa (opcional, no oficial)
+- **macOS:** arranque automático con `configuracion/launchd/com.limber.casa.plist`. Da permiso de *Accesibilidad* a
+  Python para el teclado y el mouse.
+- **Windows:** `powershell -ExecutionPolicy Bypass -File .\instalar-windows.ps1` como administrador.
 
-```bash
-cd casa/alexa && npm install && ALEXA_PRINCIPAL="Nombre de tu Echo" node alexa.js
-```
+### 6. Voz sin internet (opcional)
 
-Abre `http://127.0.0.1:3456` en la Mac e inicia sesión en Amazon. Usa [alexa-remote2](https://github.com/Apollon77/alexa-remote), que no es oficial y puede dejar de funcionar si Amazon cambia algo.
+Instala el motor [sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/tts/apk-engine.html) con la voz `es_MX-ald-medium`
+(arm64) y ponlo como motor del sistema.
 
 Todos los ajustes están en [docs/configuracion.md](docs/configuracion.md).
 
 ---
 
-## Doble sistema: dArkOS en la SD
-
-Si quieres un sistema de juegos tipo ArkOS sin perder Android (ni a Monki): graba [dArkOS](https://github.com/christianhaitian/dArkOS/releases) para RG353V en una SD (con Raspberry Pi Imager; `dd` desde la terminal de macOS no tiene permiso) y ponla en **TF1**. Con la SD puesta arranca dArkOS; sin ella, Android con Monki. La tarjeta de juegos va en TF2: en dArkOS, *Options → Advanced → Switch to SD2 for Roms*, y espera a que termine sin reiniciar.
-
-> ROCKNIX actual no sirve aquí: su Linux *mainline* solo arranca si borras el Android interno.
-
 ## Uso
 
-- **"hey monki"** o el botón **X**: escucha. **B** interrumpe. Mientras habla también lo cortas con "hey monki".
-- Ejemplos: *"¿cómo estará el clima mañana?"*, *"pon una alarma a las 7 con Metallica"*, *"¿qué alarmas tengo?"*, *"pon un temporizador de 10 minutos"*, *"abre PPSSPP"*, *"pon música relajante en Spotify"*, *"siguiente canción"*, *"¿cómo está mi Mac?"*, *"cierra Chrome en la Mac"*, *"ponte morado"*, *"buenas noches"*.
-- Llámalo con **"hey monki"**: el nombre solo, sin "hey", solo lo despierta si se entiende muy claro (así no se activa con la tele o los juegos).
-- Rutinas por voz: *"crea una rutina 'a jugar' que suba el brillo a 80 y abra PPSSPP"*.
+| Control | Acción |
+|---|---|
+| *"hey monki"* o **X** | Escucha |
+| **B** | Interrumpe, cierra el video o el detalle |
+| Cruceta + **A** | Elige widgets, videos, canciones y botones |
+| Botones de volumen | Volumen del Echo o de la consola, según dónde suene |
 
-## Privacidad y secretos
+**Ejemplos:** *"¿cómo estará el clima mañana?"* · *"pon una alarma a las 7 con Metallica"* · *"pon en YouTube Nirvana"* ·
+*"pon música relajante en Spotify"* · *"siguiente canción"* · *"¿cómo está mi Mac?"* · *"ponte morado"* ·
+*"crea una rutina 'a jugar' que suba el brillo a 80 y abra PPSSPP"*.
 
-- Las claves de API, tu nombre, tu ciudad y los servidores se guardan **solo en la consola** (preferencias de la app), nunca en el código.
-- `casa/.env` (clave del hub), `casa/alexa/alexa-cookie.json` (sesión de Amazon), logs, modelos y APKs están en `.gitignore`. **No los subas ni los compartas.**
+El nombre solo, sin "hey", despierta a Monki únicamente si se entiende muy claro, para que no se active con la tele, los
+juegos o el propio video.
+
+### Doble sistema: dArkOS en la SD
+
+Graba [dArkOS](https://github.com/christianhaitian/dArkOS/releases) para RG353V en una SD con Raspberry Pi Imager y ponla
+en **TF1**: con la SD arranca dArkOS; sin ella, Android con Monki. Los juegos van en TF2 (*Options → Advanced → Switch to
+SD2 for Roms*). ROCKNIX actual no sirve: solo arranca si borras el Android interno.
+
+---
+
+## Estructura del repositorio
+
+| Carpeta | Contenido |
+|---|---|
+| [`asistente-apk/`](asistente-apk) | App Android en Kotlin: Monki en la consola (llama.cpp como submódulo) |
+| [`casa/`](casa) | Hub MCP en Python (FastMCP) para Mac o Windows, voz Edge y puente de Alexa en Node |
+| [`agente/`](agente) | Versión de escritorio: el agente corre en la Mac y maneja la consola por adb |
+| [`herramientas/`](herramientas) | Modelo Vosk, autorización de Spotify, sesión de Alexa y análisis de voz |
+| [`configuracion/`](configuracion) | Plantillas de LaunchAgent (macOS) y controles de PPSSPP |
+| [`docs/`](docs) | Documentación técnica |
+
+## Documentación
+
+- [Arquitectura](docs/arquitectura.md): componentes, flujo de un pedido y decisiones.
+- [Configuración](docs/configuracion.md): todos los ajustes por adb.
+- [Problemas conocidos](docs/problemas-conocidos.md): lo aprendido a golpes con esta consola.
+- [Pendientes](docs/pendientes.md): lo que falta.
+
+## Privacidad y seguridad
+
+- Claves, nombre, ciudad, sesión de Amazon y permiso de Spotify se guardan **solo en la consola**, nunca en el código.
+- `casa/.env`, `casa/alexa/alexa-cookie.json`, logs, modelos y APKs están en `.gitignore`. **No los compartas.**
 - El hub `casa` exige su clave en cada petición y el puente de Alexa solo escucha en `127.0.0.1`.
 
-## Problemas conocidos
-
-Lo aprendido a golpes está en [docs/problemas-conocidos.md](docs/problemas-conocidos.md). Lo más importante:
-
-- Un servicio de accesibilidad con permiso de gestos rompe la cruceta y el stick en los emuladores.
-- El micrófono trae un zumbido de 60/180 Hz casi tan fuerte como la voz: hay que filtrarlo para saber cuándo terminaste de hablar.
-- El reproductor de Rockchip se traba si se le cambia la velocidad.
-- Las cuotas gratis se acaban rápido: por eso la cadena de proveedores y el modelo local.
-
-## Créditos y licencias
+## Créditos
 
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) y [Qwen2.5](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (Apache 2.0): modelo local.
-- [Vosk](https://alphacephei.com/vosk/) (Apache 2.0): palabra de activación sin internet.
+- [Vosk](https://alphacephei.com/vosk/) (Apache 2.0): palabra de activación.
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) y [Piper](https://github.com/rhasspy/piper): voz sin internet.
 - [edge-tts](https://github.com/rany2/edge-tts): voz neuronal de Microsoft Edge.
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), [alexa-remote2](https://github.com/Apollon77/alexa-remote), [PyChromecast](https://github.com/home-assistant-libs/pychromecast), [PyAutoGUI](https://github.com/asweigart/pyautogui).
 - Inspirado en [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32).
 
+<div align="center">
+
 Código bajo licencia [MIT](LICENSE).
+
+</div>
