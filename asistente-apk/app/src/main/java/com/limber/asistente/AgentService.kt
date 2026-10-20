@@ -1428,7 +1428,7 @@ class AgentService : AccessibilityService(), Controls {
                     musicPlay.text = if (musicPlaying) "⏸" else "▶"
                     musicLen = (j.optDouble("d", 0.0) * 1000).toLong()
                     if (!musicSeeking) { musicPos = (j.optDouble("t", 0.0) * 1000).toLong(); musicPosAt = System.currentTimeMillis() }
-                    val title = j.optString("title").ifBlank { youtubeTitle }
+                    val title = j.optString("title").ifBlank { youtubeTitle }.let { if (it.length > 42) it.take(41).trimEnd() + "…" else it }
                     val t = android.text.SpannableString("$title\nYouTube")
                     t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
                     t.setSpan(android.text.style.AbsoluteSizeSpan(16, true), 0, title.length, 0)
@@ -2015,6 +2015,7 @@ class AgentService : AccessibilityService(), Controls {
                     }.ifEmpty { "Sin alarmas en el Echo." }
                     showDetail("⏰ Alarmas", "$echo\n\nEn la consola:\n${alarms.list()}")
                 }
+                pcCards.isEmpty() -> showDetail("🎮 Consola RG353V", consoleDetail())
                 else -> {
                     val alias = pcCards.keys.toList().getOrNull(index - 1) ?: return@launch
                     val c = remoteClients.firstOrNull { it.alias == alias } ?: return@launch
@@ -2149,9 +2150,42 @@ class AgentService : AccessibilityService(), Controls {
         )
         val right = mutableListOf((next?.let { "⏰ ${it.first}" } ?: "⏰ —") to (next?.second?.take(16) ?: "sin alarmas"))
         right += pcCards.values
+        if (pcCards.isEmpty()) right += consoleCard()   // sin computadora conectada: la tarjeta es de la consola
         val accent = moodColor()
         fillColumn(leftCol, left, accent)
         fillColumn(rightCol, right, accent)
+    }
+
+    /** Tarjeta de la consola: modelo, batería, almacenamiento libre y RAM en uso. */
+    private fun consoleCard(): Pair<String, String> {
+        val bat = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val pct = bat?.let { it.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, 0) * 100 / it.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1) } ?: 0
+        val charging = (bat?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        val free = android.os.StatFs(android.os.Environment.getDataDirectory().path).availableBytes / 1_000_000_000
+        val mem = android.app.ActivityManager.MemoryInfo().also { (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(it) }
+        val ram = if (mem.totalMem > 0) 100 - mem.availMem * 100 / mem.totalMem else 0
+        return "🎮 RG353V" to "🔋$pct%${if (charging) "⚡" else ""} · 💾 $free GB\nRAM $ram%"
+    }
+
+    /** Detalle de la consola al tocar su tarjeta: batería, almacenamiento, memoria, sonido, pantalla y sistema. */
+    private fun consoleDetail(): String {
+        val bat = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val pct = bat?.let { it.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, 0) * 100 / it.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1) } ?: 0
+        val charging = (bat?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        val temp = (bat?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10
+        val fs = android.os.StatFs(android.os.Environment.getDataDirectory().path)
+        val mem = android.app.ActivityManager.MemoryInfo().also { (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(it) }
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        val vol = am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val bright = runCatching { android.provider.Settings.System.getInt(contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) * 100 / 255 }.getOrDefault(0)
+        val up = android.os.SystemClock.elapsedRealtime() / 60_000
+        val gb = { b: Long -> "%.1f".format(b / 1e9) }
+        return "🔋 Batería: $pct%${if (charging) " (cargando)" else ""} · $temp °C\n" +
+            "💾 Almacenamiento: ${gb(fs.availableBytes)} GB libres de ${gb(fs.totalBytes)} GB\n" +
+            "🧠 RAM: ${gb(mem.totalMem - mem.availMem)} de ${gb(mem.totalMem)} GB\n" +
+            "🔊 Volumen: $vol% · ${if (audioOnSpeaker()) "en la bocina" else "en la consola"}\n" +
+            "☀ Brillo: $bright%\n" +
+            "🤖 Android ${android.os.Build.VERSION.RELEASE} · encendida ${up / 60} h ${up % 60} min"
     }
 
     /** Una tarjeta por dato, repartidas a lo alto de la columna. */

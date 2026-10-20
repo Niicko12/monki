@@ -73,5 +73,5 @@ El micrófono por el conector de audífonos de la consola trae zumbido eléctric
 - **wttr.in con user agent de navegador** devuelve HTML en vez de texto: el widget usa el de curl.
 - **`casa` colgado tras reiniciarlo:** con `uv run casa.py` en el LaunchAgent, `launchctl kickstart -k` mataba a `uv` pero no al Python hijo, que se quedaba con el puerto 8800 sin responder (`address already in use` en el log). El LaunchAgent ahora lanza `.venv/bin/python casa.py` directo.
 - **Alexa no crea alarmas por orden de texto:** "pon una alarma…" enviado como texto no hace nada. `alexa.js` usa la API de notificaciones (ver [arquitectura](arquitectura.md)).
-- **El DNS del router no resuelve `i.scdn.co`** (portadas de Spotify) desde la consola, aunque la Mac sí: la portada se pide a `casa` (`POST /portada`).
+- **El DNS de algunos routers no resuelve `i.scdn.co`** (portadas de Spotify): con DNS privado `dns.google` en Ajustes → Red se resuelve.
 - **Spotify en los Echo:** `getPlayerInfo` devuelve todo vacío; la información está en `/api/np/list-media-sessions`.

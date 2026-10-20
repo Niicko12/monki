@@ -67,29 +67,35 @@ adb shell "run-as com.limber.asistente sh -c 'mkdir -p files && cp /data/local/t
 adb shell rm /data/local/tmp/llm.gguf
 ```
 
-Para compilar hacen falta el NDK `27.2.12479018` y CMake `3.22.1` del SDK de Android, y el submódulo (`git submodule update --init`).
+También se descarga desde la pantalla de configuración (botón **Descargar**). Para compilar hacen falta el NDK `27.2.12479018` y CMake `3.22.1` del SDK de Android, y el submódulo (`git submodule update --init`).
 
-## `casa` (Mac o Windows)
+## Spotify
 
-| Archivo | Para qué |
-|---|---|
-| `casa/.env` | `CASA_TOKEN=…`; se crea solo, no se sube |
-| `configuracion/launchd/com.limber.casa.plist` | Arranque automático en macOS (cambia `$HOME` por tu ruta y cópialo a `~/Library/LaunchAgents/`) |
-| `casa/instalar-windows.ps1` | Instalación en Windows |
+Desde la pantalla de configuración de la app: pega el **Client ID** de una app gratis de
+[Spotify for Developers](https://developer.spotify.com/dashboard) con la Redirect URI `http://127.0.0.1:8899/callback`
+y toca **Conectar**. Se abre el inicio de sesión de Spotify dentro de Monki (PKCE, sin *client secret*) y el permiso
+queda guardado en la consola. Alternativa por adb: `herramientas/spotify-autorizar.py TU_CLIENT_ID`.
 
-Dependencias nuevas: `edge-tts` (voz) y `pyautogui` (teclado y ratón). En macOS, teclado y ratón requieren permiso de **Accesibilidad** para `uv`/`python`. `pc_captura` y `pc_raton` usan solo la pantalla principal.
+## Echo de Alexa
 
-Si la Mac cambia de IP, Monki deja de alcanzar `casa`. Vuelve a mandar `mcp_servers` con la IP nueva, o reserva la IP en el router.
+Monki controla el Echo con la API no oficial de Amazon (la misma de
+[alexa-remote2](https://github.com/Apollon77/alexa-remote)); puede dejar de funcionar si Amazon cambia algo.
+La sesión de Amazon se obtiene **una sola vez** con el puente de `casa/alexa` (Node.js) en cualquier computadora con la
+consola conectada por USB, y luego se renueva sola en la consola:
 
-## Alexa
+```bash
+cd casa/alexa && npm install && node alexa.js     # abre http://127.0.0.1:3456 e inicia sesión en Amazon
+python3 herramientas/alexa-a-consola.py "Nombre de tu Echo"
+```
 
-| Variable o archivo | Para qué |
-|---|---|
-| `ALEXA_PRINCIPAL` | Nombre del Echo por defecto, tal como lo da `alexa_dispositivos` |
-| `casa/alexa/alexa-cookie.json` | Sesión de Amazon. **Secreto**: no lo subas ni lo compartas |
-| `configuracion/launchd/com.limber.alexa.plist` | Arranque automático del puente |
+`casa/alexa/alexa-cookie.json` es la sesión de Amazon: **secreto**, no lo subas ni lo compartas. Para el botón
+**🔊 Bocina**, empareja una vez: *"hey monki, empareja la consola con el Echo"*.
 
-Para volver a iniciar sesión, borra `alexa-cookie.json`, reinicia el puente y abre `http://127.0.0.1:3456`.
+## Hub `casa` (opcional, avanzado)
+
+`casa/casa.py` es un servidor MCP en Python para controlar una computadora desde Monki. No hace falta para nada de lo
+anterior. Se conecta con el ajuste `mcp_servers` (`alias|http://IP:8800/mcp|CASA_TOKEN`); la clave se crea sola en
+`casa/.env`, que no se sube.
 
 ## PPSSPP
 

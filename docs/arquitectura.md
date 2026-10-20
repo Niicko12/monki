@@ -31,7 +31,7 @@ Kotlin, sin dependencias de UI externas, `minSdk 30` (Android 11). Todo vive en 
 palabra de activación (Vosk) → aviso sonoro → graba hasta 0.9 s de silencio
   → Whisper (Groq) transcribe; si tarda más de 8 s o falla, Gemini
   → responde el primer proveedor disponible, llamando herramientas las veces que haga falta
-  → voz: Edge (desde casa); si no, Gemini TTS; si no, Piper sin internet, por oraciones
+  → voz: Edge (si hay un hub `casa`); si no, Gemini TTS; si no, Piper sin internet, por oraciones
   → si el pedido fue por voz y no suena música, vuelve a escuchar (seguimiento: espera 4 s, graba máx. 10 s);
     luego a la palabra de activación
 ```
@@ -64,18 +64,18 @@ Para los proveedores con formato OpenAI se mandan solo los últimos 8 mensajes, 
 - Con música sonando, Groq clasifica cada canción nueva por título y artista; la cara usa ese ánimo y su color, y se mece si es feliz o emocionado.
 - Widgets cada 15 s; clima cada 20 min (wttr.in); computadoras cada minuto (`pc_info formato=json`: modelo, batería, disco, CPU, RAM); reproductor cada 10 s (`alexa_reproduciendo`). Los widgets y los botones principales usan el color del ánimo (el de la canción si suena música).
 - Las alarmas que pides a Monki van al Echo (`alexa_alarma`); el widget muestra la próxima del Echo y, al tocarlo, todas.
-- Al tocar el reproductor aparece la lista de canciones de lo que suena (`spotify_lista`: `casa` lee la página pública de Spotify para insertar listas, `open.spotify.com/embed/…`); tocar una canción se la pide al Echo.
+- Al tocar el reproductor aparece la lista de canciones de lo que suena (`Spotify.playlist` en la app lee la página pública de Spotify para insertar listas, `open.spotify.com/embed/…`); tocar una canción se la pide al Echo.
 - **Volumen y salida de sonido:** el botón "📺 Consola / 🔊 Bocina" de arriba cambia por dónde sale el sonido de la consola (YouTube, juegos): su bocina o el Echo por Bluetooth. YouTube suena donde esté elegido. Los botones de volumen ajustan el Echo solo si suena Spotify en él; si no, el volumen de la consola (que llega al Echo si está por Bluetooth). Al presionarlos se ve el destino y el nivel. `audio.salida` (y el botón) cambia la salida: **Bocina** = prende el Bluetooth, empareja solo si no hay vínculo (`audio.emparejar`) y le pide al Echo "conéctate a <nombre Bluetooth de la consola>"; mientras conecta acepta solo la pregunta "¿Vincular?" que a veces lanza el Echo (si nadie la acepta, Android borra el vínculo). **Consola** = "desconéctate de <nombre>" y, si en 4 s no se desconecta, apaga el Bluetooth (en esta consola eso borra el emparejamiento; al volver a la bocina se rehace solo). El botón ignora toques mientras cambia. La voz de Monki siempre sale por la consola.
 - `audio.emparejar` empareja la consola con el Echo una vez: pone al Echo en modo de emparejamiento, lo busca (nombre con "Echo"), llama a `createBond()`, oculta el panel para que se vea la pregunta de Android y la acepta tocando "Vincular" con el servicio de accesibilidad. Requiere `ACCESS_FINE_LOCATION` (por adb: `pm grant … ACCESS_FINE_LOCATION`). Por adb: `--es audio emparejar|bocina|consola`.
 - El reproductor se oculta si Spotify lleva más de 1 minuto en pausa o se detuvo.
-- **YouTube en la consola** (sin la Mac): `youtube.reproducir` busca en la página de resultados de YouTube (con user agent de escritorio: la versión móvil trae los datos escapados) y muestra hasta 8 resultados con miniatura (`i.ytimg.com`) en el lugar de la cara; el usuario toca uno. El video va en un WebView con el reproductor oficial para insertar, cargado con un origen propio (`https://monki.app/`) para que YouTube reciba un *referer*. Si el dueño prohíbe insertarlo (error 101/150, avisado por una interfaz JavaScript), Monki avisa y vuelve a la lista. Se cierra con B, con ✕ o pidiéndolo (`youtube.cerrar`).
+- **YouTube en la consola**: `youtube.reproducir` busca en la página de resultados de YouTube (con user agent de escritorio: la versión móvil trae los datos escapados) y muestra hasta 8 resultados con miniatura (`i.ytimg.com`) en el lugar de la cara; el usuario toca uno. El video va en un WebView con el reproductor oficial para insertar, cargado con un origen propio (`https://monki.app/`) para que YouTube reciba un *referer*. Si el dueño prohíbe insertarlo (error 101/150, avisado por una interfaz JavaScript), Monki avisa y vuelve a la lista. Se cierra con B, con ✕ o pidiéndolo (`youtube.cerrar`).
 - **El reproductor de abajo controla el video** mientras está abierto: lee `currentTime`, `duration` y el estado del reproductor cada segundo; ⏯ pausa, ⏮ ⏭ saltan 10 s y la barra hace `seekTo`.
 - **Una sola cosa suena a la vez:** abrir un video manda la tecla de pausa del sistema y pausa Spotify por la API (esté en la consola o en el Echo); darle play a Spotify en la consola pausa el video.
 - **Ánimo del video:** Groq clasifica el título (bailable, alegre, tranquilo, triste o pesado) y ese ánimo manda sobre el de la música mientras el video está abierto. Con un video abierto la palabra de activación queda en modo estricto.
 - Cara: respira (ojos y flotación con un seno de 3.5 s), destello de luz en los ojos sin párpado, rebote y parpadeo al cambiar de expresión, color que se desvanece, parpadeo doble ocasional, puntitos al pensar, "z" al dormir y corazones que laten. Todo a ~30 cuadros por segundo.
 - Al escribir con el teclado aparece "← Volver" y se ocultan "Hablar" y el reproductor.
 - Al tocar un widget (o A con la cruceta) su detalle aparece en el lugar de la cara: estado de la consola, clima y pronóstico, alarmas o la información completa de la computadora. Se cierra solo a los 20 s, tocándolo o con B.
-- Reproductor: portada (vía `casa`), fondo con el color de la portada, barra arrastrable (o cruceta) que llama a `alexa_saltar`, y los botones de volumen de la consola controlan el Echo (`alexa_volumen`, de 5 en 5) mientras el panel está abierto y suena música.
+- Reproductor: portada (directo de Spotify), fondo con el color de la portada, barra arrastrable (o cruceta) que llama a `alexa_saltar`, y los botones de volumen de la consola controlan el Echo (`alexa_volumen`, de 5 en 5) mientras el panel está abierto y suena música.
 - El panel es de pantalla completa: la ventana usa `fitInsetsTypes = 0` y `FLAG_LAYOUT_IN_SCREEN`, y oculta la barra de estado de Android con `WindowInsetsController` (vuelve deslizando desde arriba). Sin eso empezaba debajo de la barra (y = 24) y la fila de abajo quedaba fuera.
 - Los detalles de un widget se cierran solos a los 10 s, tocándolos o con cualquier botón.
 
@@ -91,9 +91,9 @@ Vosk con el modelo pequeño de español no conoce "monki". La gramática acepta 
 - La ganancia es automática, hasta ×4, para no saturar la voz.
 - Cada vez que oye algo, guarda los últimos 4 s en `Android/data/com.limber.asistente/files/wake-debug.wav`, para analizarlos con `herramientas/voz/`.
 
-## Hub `casa`
+## Hub `casa` (opcional)
 
-`casa/casa.py` es un servidor MCP (FastMCP, Streamable HTTP, sin estado) en `0.0.0.0:8800/mcp`. Exige `Authorization: Bearer CASA_TOKEN`, y la clave se genera en `.env` la primera vez. Funciona en macOS y en Windows (`instalar-windows.ps1`).
+`casa/casa.py` es un servidor MCP (FastMCP, Streamable HTTP, sin estado) en `0.0.0.0:8800/mcp`. Exige `Authorization: Bearer CASA_TOKEN`, y la clave se genera en `.env` la primera vez. Es opcional: Monki funciona completo sin él.
 
 Herramientas: `red_escanear`; `pc_*`: estado, info, captura, abrir app o URL, apps abiertas, volumen, silencio, brillo, decir, notificar, música, teclado, ratón, portapapeles, ventanas, archivos y energía (reiniciar y apagar piden `confirmar=true`); `tv_*` (Chromecast/YouTube); `android_*` (celulares por adb); `focos_estado`; `alexa_*`: comando, decir, dispositivos, reproduciendo, control, saltar, volumen, alarma, alarmas y borrar_alarma; `spotify_lista` (canciones de una lista o álbum de Spotify).
 
@@ -112,4 +112,4 @@ Además de MCP, `casa` atiende `POST /voz` (con la misma clave): recibe `{"texto
 
 ## Agente de escritorio (`agente`)
 
-`agente/agente.py` es la primera versión: corre en la Mac con la API de Gemini y maneja la consola por adb, con capturas, toques y escritura. Hoy la app de la consola hace lo mismo sin necesitar la Mac.
+`agente/agente.py` es la primera versión: corre en una computadora con la API de Gemini y maneja la consola por adb, con capturas, toques y escritura. Hoy la app de la consola hace lo mismo sin necesitar la Mac.

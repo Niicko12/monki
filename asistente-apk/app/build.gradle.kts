@@ -11,8 +11,8 @@ android {
         applicationId = "com.limber.asistente"
         minSdk = 30
         targetSdk = 34
-        versionCode = 7
-        versionName = "6.0"
+        versionCode = 8
+        versionName = "1.0"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release") } }
     }

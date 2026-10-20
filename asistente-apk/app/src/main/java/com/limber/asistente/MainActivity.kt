@@ -15,8 +15,13 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-/** Pantalla de configuración: API Key, modelo, permisos y prueba. */
+/** Pantalla de configuración: claves de IA, datos del usuario, permisos, modelo local, Spotify y opciones avanzadas. */
 class MainActivity : Activity() {
+    private companion object {
+        const val LOCAL_MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf"
+        const val SPOTIFY_REDIRECT = "http://127.0.0.1:8899/callback"
+        const val SPOTIFY_SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing"
+    }
 
     private lateinit var prefs: Prefs
     private lateinit var status: TextView
@@ -74,107 +79,245 @@ class MainActivity : Activity() {
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
     private fun build(): ScrollView {
+        val accent = Color.parseColor("#6CC79C")
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(16))
-            setBackgroundColor(Color.parseColor("#141917"))
+            setPadding(dp(16), dp(16), dp(16), dp(24))
         }
         fun text(t: String, size: Float = 14f, color: String = "#E4E9E6") = TextView(this).apply {
             text = t; setTextSize(TypedValue.COMPLEX_UNIT_SP, size); setTextColor(Color.parseColor(color))
-            setPadding(0, dp(6), 0, dp(4))
+            setPadding(0, dp(4), 0, dp(4))
         }
         fun field(value: String, hint: String, secret: Boolean = false) = EditText(this).apply {
-            setText(value); this.hint = hint; setTextColor(Color.WHITE); setHintTextColor(Color.GRAY); setSingleLine(true)
+            setText(value); this.hint = hint; setTextColor(Color.WHITE); setHintTextColor(Color.parseColor("#6E7A75")); setSingleLine(true)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        fun button(t: String, onClick: () -> Unit) = Button(this).apply { text = t; isAllCaps = false; setOnClickListener { onClick() } }
+        fun pill(fill: Int, stroke: Int) = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(20).toFloat(); setColor(fill); setStroke(dp(1), stroke)
+        }
+        fun button(t: String, primary: Boolean = false, onClick: () -> Unit) = Button(this).apply {
+            text = t; isAllCaps = false; setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(if (primary) Color.parseColor("#0F1412") else Color.WHITE)
+            background = if (primary) pill(accent, accent) else pill(Color.parseColor("#26302C"), Color.parseColor("#3A4741"))
+            setPadding(dp(14), 0, dp(14), 0); minHeight = dp(40); minimumHeight = dp(40)
+            setOnClickListener { onClick() }
+        }
+        fun card(title: String, subtitle: String? = null): LinearLayout {
+            val c = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(12))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat(); setColor(Color.parseColor("#1B2320")); setStroke(dp(1), Color.parseColor("#2C3833"))
+                }
+            }
+            c.addView(text(title, 16f, "#6CC79C").apply { typeface = android.graphics.Typeface.DEFAULT_BOLD })
+            subtitle?.let { c.addView(text(it, 12f, "#9AA6A1")) }
+            col.addView(c, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            return c
+        }
+        fun row(vararg views: android.view.View) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            views.forEachIndexed { i, v ->
+                addView(v, if (v is EditText) LinearLayout.LayoutParams(0, -2, 1f) else LinearLayout.LayoutParams(-2, -2).apply { if (i > 0) leftMargin = dp(8) })
+            }
+        }
+        fun open(url: String) = runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
 
-        col.addView(text("✦ ${prefs.assistantName}", 22f, "#6CC79C"))
-        col.addView(text("Tu asistente con Gemini dentro de la consola. Ve la pantalla, toca por ti y te responde en voz alta.", 13f, "#9AA6A1"))
-
+        col.addView(text("✦ ${prefs.assistantName}", 26f, "#6CC79C").apply { typeface = android.graphics.Typeface.DEFAULT_BOLD })
+        col.addView(text("Tu asistente de voz con cara. Configúralo en 3 pasos y di \"hey monki\".", 13f, "#9AA6A1"))
         status = text("", 14f)
         col.addView(status)
 
-        col.addView(text("API Key de Gemini", 13f, "#9AA6A1"))
-        val key = field(prefs.apiKey, "Pega tu API Key", secret = true)
-        col.addView(key)
-        col.addView(text("Modelo", 13f, "#9AA6A1"))
+        // Paso 1: claves de IA
+        val ia = card("1 · Inteligencia (gratis)", "Pega al menos una clave. Con varias, Monki casi nunca se queda sin respuesta.")
+        val groq = field(prefs.groqKey, "Clave de Groq (recomendada)", secret = true)
+        val nvidia = field(prefs.nvidiaKey, "Clave de NVIDIA", secret = true)
+        val openrouter = field(prefs.openRouterKey, "Clave de OpenRouter", secret = true)
+        val key = field(prefs.apiKey, "Clave de Gemini (para que vea la pantalla)", secret = true)
+        ia.addView(row(groq, button("Obtener") { open("https://console.groq.com/keys") }))
+        ia.addView(row(nvidia, button("Obtener") { open("https://build.nvidia.com") }))
+        ia.addView(row(openrouter, button("Obtener") { open("https://openrouter.ai/keys") }))
+        ia.addView(row(key, button("Obtener") { open("https://aistudio.google.com/apikey") }))
+
+        // Paso 2: sobre ti
+        val me = card("2 · Sobre ti", "Para saludarte por tu nombre y darte el clima de tu ciudad.")
+        val userName = field(prefs.userName, "Tu nombre")
+        val location = field(prefs.location, "Tu ciudad, estado, país")
+        me.addView(userName); me.addView(location)
+
+        // Paso 3: permisos
+        val perms = card("3 · Permisos", "Monki necesita el servicio de accesibilidad para mostrarse y manejar la consola, y el micrófono para oírte.")
+        perms.addView(row(
+            button("Activar accesibilidad") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            button("Permitir micrófono") { requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1) },
+        ))
+
+        // Extras
+        val local = card("Sin internet (opcional)", "Descarga un modelo pequeño (≈ 430 MB) para que Monki conteste aunque no haya internet o se acaben las cuotas.")
+        val localStatus = text(if (localModel().exists()) "✅ Modelo instalado" else "No instalado", 13f)
+        local.addView(row(localStatus, button(if (localModel().exists()) "Volver a descargar" else "Descargar") { downloadModel(localStatus) }))
+
+        val spot = card("Spotify (opcional)", "Crea una app gratis en developer.spotify.com con la Redirect URI $SPOTIFY_REDIRECT y pega aquí su Client ID.")
+        val spotifyId = field(prefs.spotifyClientId, "Client ID de Spotify")
+        val spotifyStatus = text(if (prefs.spotifyRefresh.isNotBlank()) "✅ Conectado" else "Sin conectar", 13f)
+        spot.addView(row(spotifyId, button("Conectar") {
+            prefs.spotifyClientId = spotifyId.text.toString().trim()
+            if (prefs.spotifyClientId.isBlank()) spotifyStatus.text = "Pega primero el Client ID" else connectSpotify(spotifyStatus)
+        }))
+        spot.addView(spotifyStatus)
+
+        // Avanzado
+        val adv = card("Avanzado")
+        val advBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = android.view.View.GONE }
+        adv.addView(button("Mostrar opciones avanzadas") {
+            advBody.visibility = if (advBody.visibility == android.view.View.GONE) android.view.View.VISIBLE else android.view.View.GONE
+        })
+        adv.addView(advBody)
+        fun labeled(label: String, v: android.view.View) { advBody.addView(text(label, 12f, "#9AA6A1")); advBody.addView(v) }
         val model = field(prefs.model, Prefs.DEFAULT_MODEL)
-        col.addView(model)
-        col.addView(text("Personalidad", 13f, "#9AA6A1"))
         val persona = field(prefs.persona, Prefs.DEFAULT_PERSONA).apply { setSingleLine(false); maxLines = 4 }
-        col.addView(persona)
-        col.addView(text("Modo Alexa", 16f, "#6CC79C"))
-        val alexa = CheckBox(this).apply { text = "Siempre encendida y escuchando la palabra de activación"; isChecked = prefs.alexaMode; setTextColor(Color.WHITE) }
-        col.addView(alexa)
-        col.addView(text("Palabra de activación", 13f, "#9AA6A1"))
         val wakeWord = field(prefs.wakeWord, "monkey")
-        col.addView(wakeWord)
-        col.addView(text("Voz (Charon, Orus, Iapetus, Algenib, Kore, Puck…)", 13f, "#9AA6A1"))
         val voiceName = field(prefs.voiceName, "Charon")
-        col.addView(voiceName)
-        col.addView(text("Color de la cara (${FaceColors.names.keys.joinToString()}, #RRGGBB o \"ánimo\")", 13f, "#9AA6A1"))
-        val faceColor = field(prefs.faceColor, "verde")
-        col.addView(faceColor)
+        val faceColor = field(prefs.faceColor, "ánimo")
+        labeled("Personalidad", persona)
+        labeled("Color (${FaceColors.names.keys.joinToString()}, #RRGGBB o \"ánimo\")", faceColor)
+        labeled("Palabra de activación", wakeWord)
+        labeled("Voz de Gemini (Charon, Orus, Kore, Puck…)", voiceName)
+        labeled("Modelo de Gemini", model)
+        val alexa = CheckBox(this).apply { text = "Siempre escuchando la palabra de activación"; isChecked = prefs.alexaMode; setTextColor(Color.WHITE) }
         val voice = CheckBox(this).apply { text = "Responder en voz alta"; isChecked = prefs.voiceEnabled; setTextColor(Color.WHITE) }
         val bubble = CheckBox(this).apply { text = "Mostrar burbuja flotante"; isChecked = prefs.bubbleEnabled; setTextColor(Color.WHITE) }
-        col.addView(voice); col.addView(bubble)
-
-        col.addView(text("Control desde otros agentes (MCP)", 16f, "#6CC79C"))
-        val mcpOn = CheckBox(this).apply { text = "Permitir que otros agentes de mi red controlen la consola"; isChecked = prefs.mcpServerEnabled; setTextColor(Color.WHITE) }
-        col.addView(mcpOn)
-        mcpInfo = text("", 13f, "#9AA6A1").apply { setTextIsSelectable(true) }
-        col.addView(mcpInfo)
-        col.addView(text("Servidores MCP externos (una línea: nombre|url|clave)", 13f, "#9AA6A1"))
-        val servers = field(prefs.mcpServers, "mac|http://192.168.1.10:8800/mcp|clave").apply { setSingleLine(false); minLines = 2 }
-        col.addView(servers)
-        col.addView(text("Computadoras para prender (una línea: nombre|MAC|IP)", 13f, "#9AA6A1"))
+        val mcpOn = CheckBox(this).apply { text = "Permitir que otros agentes de mi red controlen la consola (MCP)"; isChecked = prefs.mcpServerEnabled; setTextColor(Color.WHITE) }
+        advBody.addView(alexa); advBody.addView(voice); advBody.addView(bubble); advBody.addView(mcpOn)
+        mcpInfo = text("", 12f, "#9AA6A1").apply { setTextIsSelectable(true) }
+        advBody.addView(mcpInfo)
+        val servers = field(prefs.mcpServers, "nombre|http://IP:8800/mcp|clave").apply { setSingleLine(false); minLines = 2 }
         val wol = field(prefs.wolDevices, "pc|AA:BB:CC:DD:EE:FF|192.168.1.20").apply { setSingleLine(false); minLines = 2 }
-        col.addView(wol)
-        val serversStatus = text("", 13f, "#9AA6A1")
-        col.addView(serversStatus)
+        labeled("Servidores MCP (uno por línea: nombre|url|clave)", servers)
+        labeled("Equipos para encender (uno por línea: nombre|MAC|IP)", wol)
+        val serversStatus = text("", 12f, "#9AA6A1")
+        advBody.addView(serversStatus)
 
-        col.addView(button("Guardar") {
-            prefs.apiKey = key.text.toString(); prefs.model = model.text.toString(); prefs.persona = persona.text.toString()
-            prefs.voiceEnabled = voice.isChecked; prefs.bubbleEnabled = bubble.isChecked
-            prefs.mcpServerEnabled = mcpOn.isChecked; prefs.mcpServers = servers.text.toString()
-            prefs.wolDevices = wol.text.toString()
-            prefs.alexaMode = alexa.isChecked; prefs.wakeWord = wakeWord.text.toString()
-            prefs.voiceName = voiceName.text.toString()
-            if (FaceColors.isValid(faceColor.text.toString())) prefs.faceColor = faceColor.text.toString()
-            else faceColor.setText(prefs.faceColor)
-            AgentService.instance?.let {
-                if (bubble.isChecked) it.showBubble() else it.hideBubble()
-                it.refreshFace()
-                it.setMcpServerEnabled(mcpOn.isChecked)
-                serversStatus.text = "Conectando…"
-                it.reloadRemoteServers { s -> serversStatus.text = s }
-            }
-            refreshStatus()
-        })
-        col.addView(button("1. Activar el servicio de accesibilidad") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        })
-        col.addView(button("2. Permitir micrófono (opcional)") {
-            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
-        })
-        col.addView(button("Abrir el asistente") {
-            AgentService.instance?.let { moveTaskToBack(true); it.showPanel() } ?: refreshStatus()
-        })
-        col.addView(text("Ábrelo con la burbuja flotante. Dentro del panel: A elige, X habla, B interrumpe o cierra.", 13f, "#9AA6A1"))
+        val saved = text("", 13f, "#9AA6A1")
+        val actions = row(
+            button("Guardar", primary = true) {
+                prefs.groqKey = groq.text.toString().trim(); prefs.nvidiaKey = nvidia.text.toString().trim()
+                prefs.openRouterKey = openrouter.text.toString().trim(); prefs.apiKey = key.text.toString().trim()
+                prefs.userName = userName.text.toString(); prefs.location = location.text.toString()
+                prefs.spotifyClientId = spotifyId.text.toString().trim()
+                prefs.model = model.text.toString(); prefs.persona = persona.text.toString()
+                prefs.voiceEnabled = voice.isChecked; prefs.bubbleEnabled = bubble.isChecked
+                prefs.mcpServerEnabled = mcpOn.isChecked; prefs.mcpServers = servers.text.toString()
+                prefs.wolDevices = wol.text.toString()
+                prefs.alexaMode = alexa.isChecked; prefs.wakeWord = wakeWord.text.toString()
+                prefs.voiceName = voiceName.text.toString()
+                if (FaceColors.isValid(faceColor.text.toString())) prefs.faceColor = faceColor.text.toString()
+                else faceColor.setText(prefs.faceColor)
+                AgentService.instance?.let {
+                    if (bubble.isChecked) it.showBubble() else it.hideBubble()
+                    it.refreshFace()
+                    it.setMcpServerEnabled(mcpOn.isChecked)
+                    if (servers.text.isNotBlank()) { serversStatus.text = "Conectando…"; it.reloadRemoteServers { s -> serversStatus.text = s } }
+                }
+                saved.text = "✅ Guardado"
+                refreshStatus()
+            },
+            button("Abrir Monki") {
+                AgentService.instance?.let { moveTaskToBack(true); it.showPanel() } ?: refreshStatus()
+            },
+        )
+        col.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        col.addView(saved)
+        col.addView(text("Controles: \"hey monki\" o X habla · B interrumpe o cierra · cruceta y A eligen.", 12f, "#9AA6A1"))
         return ScrollView(this).apply { addView(col); setBackgroundColor(Color.parseColor("#141917")) }
+    }
+
+    private fun localModel() = java.io.File(filesDir, "llm.gguf")
+
+    /** Descarga el modelo local (Qwen2.5 0.5B) a files/llm.gguf, con avance en pantalla. */
+    private fun downloadModel(status: TextView) {
+        status.text = "Descargando… 0%"
+        Thread {
+            val part = java.io.File(filesDir, "llm.gguf.part")
+            val msg = runCatching {
+                val conn = java.net.URL(LOCAL_MODEL_URL).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 15_000; conn.readTimeout = 30_000; conn.instanceFollowRedirects = true
+                val total = conn.contentLengthLong
+                var done = 0L; var shown = -1
+                conn.inputStream.use { input ->
+                    part.outputStream().use { out ->
+                        val buf = ByteArray(256 * 1024)
+                        while (true) {
+                            val n = input.read(buf); if (n < 0) break
+                            out.write(buf, 0, n); done += n
+                            val pct = if (total > 0) (done * 100 / total).toInt() else -1
+                            if (pct != shown) { shown = pct; runOnUiThread { status.text = if (pct >= 0) "Descargando… $pct%" else "Descargando… ${done / 1_000_000} MB" } }
+                        }
+                    }
+                }
+                if (part.length() < 10_000_000) throw RuntimeException("descarga incompleta")
+                part.renameTo(localModel())
+                "✅ Modelo instalado"
+            }.getOrElse { part.delete(); "No se pudo descargar: ${it.message}" }
+            runOnUiThread { status.text = msg }
+        }.start()
+    }
+
+    /**
+     * Conecta Spotify sin computadora: abre el inicio de sesión de Spotify dentro de la app (PKCE, sin client secret),
+     * atrapa la redirección y guarda el permiso.
+     */
+    private fun connectSpotify(status: TextView) {
+        val verifier = android.util.Base64.encodeToString(java.security.SecureRandom().generateSeed(64), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING).take(96)
+        val challenge = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+        val url = android.net.Uri.parse("https://accounts.spotify.com/authorize").buildUpon()
+            .appendQueryParameter("client_id", prefs.spotifyClientId).appendQueryParameter("response_type", "code")
+            .appendQueryParameter("redirect_uri", SPOTIFY_REDIRECT).appendQueryParameter("scope", SPOTIFY_SCOPES)
+            .appendQueryParameter("code_challenge_method", "S256").appendQueryParameter("code_challenge", challenge).build().toString()
+        lateinit var dialog: android.app.Dialog
+        val web = android.webkit.WebView(this).apply {
+            settings.javaScriptEnabled = true; settings.domStorageEnabled = true
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: android.webkit.WebView, req: android.webkit.WebResourceRequest): Boolean {
+                    val u = req.url
+                    if (!u.toString().startsWith(SPOTIFY_REDIRECT)) return false
+                    dialog.dismiss()
+                    val code = u.getQueryParameter("code")
+                    if (code == null) { status.text = "No se autorizó: ${u.getQueryParameter("error") ?: "cancelado"}"; return true }
+                    status.text = "Conectando…"
+                    Thread {
+                        val msg = runCatching {
+                            val body = "grant_type=authorization_code&code=" + java.net.URLEncoder.encode(code, "UTF-8") +
+                                "&redirect_uri=" + java.net.URLEncoder.encode(SPOTIFY_REDIRECT, "UTF-8") +
+                                "&client_id=" + java.net.URLEncoder.encode(prefs.spotifyClientId, "UTF-8") + "&code_verifier=" + verifier
+                            val conn = java.net.URL("https://accounts.spotify.com/api/token").openConnection() as java.net.HttpURLConnection
+                            conn.requestMethod = "POST"; conn.doOutput = true
+                            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                            conn.outputStream.use { it.write(body.toByteArray()) }
+                            val text = (if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream).bufferedReader().use { it.readText() }
+                            prefs.spotifyRefresh = org.json.JSONObject(text).getString("refresh_token")
+                            "✅ Conectado"
+                        }.getOrElse { "No se pudo conectar: ${it.message}" }
+                        runOnUiThread { status.text = msg }
+                    }.start()
+                    return true
+                }
+            }
+            loadUrl(url)
+        }
+        dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply { setContentView(web); show() }
     }
 
     private fun refreshStatus() {
         if (!::status.isInitialized) return
         val service = AgentService.instance != null
-        val key = prefs.apiKey.isNotBlank()
+        val key = listOf(prefs.groqKey, prefs.nvidiaKey, prefs.openRouterKey, prefs.apiKey).any { it.isNotBlank() }
         val mic = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
         status.text = listOf(
             (if (service) "✅" else "❌") + " Servicio de accesibilidad",
-            (if (key) "✅" else "❌") + " API Key",
-            (if (mic) "✅" else "➖") + " Micrófono",
-        ).joinToString("\n")
+            (if (key) "✅" else "❌") + " Clave de IA",
+            (if (mic) "✅" else "❌") + " Micrófono",
+        ).joinToString("   ")
         status.gravity = Gravity.START
         val ip = AgentService.instance?.localIp() ?: "?"
         mcpInfo.text = if (prefs.mcpServerEnabled) "Dirección: http://$ip:8765/mcp\nClave: ${prefs.mcpToken}" else "Apagado"
