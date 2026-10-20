@@ -37,8 +37,8 @@ adb shell "am start -f 0x10008000 -n com.limber.asistente/.MainActivity --es <aj
 | `color` | Color de Monki (cara, widgets y botones): `ánimo`, o fijo: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco o `#RRGGBB` | `ánimo` |
 | `animo` | Fija el ánimo 30 min: emocionado, feliz, tranquilo, aburrido, cansado, triste o molesto | (no se guarda) |
 | `pronunciar` | Palabras que la voz lee mal, una por línea (`\n`): `Oscar=Óscar` | vacío |
-| `spotify_client_id`, `spotify_refresh` | Permiso de Spotify (lo pone `herramientas/spotify-autorizar.py`) | vacío |
-| `alexa_cookie`, `alexa_csrf`, `alexa_refresh`, `alexa_principal` | Sesión de Amazon y Echo principal (lo pone `herramientas/alexa-a-consola.py`) | vacío |
+| `spotify_client_id`, `spotify_refresh` | Permiso de Spotify (lo pone **Conectar** en la configuración) | vacío |
+| `alexa_cookie`, `alexa_csrf`, `alexa_refresh`, `alexa_principal` | Sesión de Amazon y Echo principal (lo pone **Iniciar sesión** en la configuración) | vacío |
 | `audio` | Salida de sonido: `consola`, `bocina` o `emparejar` | (no se guarda) |
 | `decir` | Prueba de voz: dice ese texto | (no se guarda) |
 | `pedir` | Prueba: hace ese pedido escrito | (no se guarda) |
@@ -83,7 +83,7 @@ También se descarga desde la pantalla de configuración (botón **Descargar**).
 Desde la pantalla de configuración de la app: pega el **Client ID** de una app gratis de
 [Spotify for Developers](https://developer.spotify.com/dashboard) con la Redirect URI `http://127.0.0.1:8899/callback`
 y toca **Conectar**. Se abre el inicio de sesión de Spotify dentro de Monki (PKCE, sin *client secret*) y el permiso
-queda guardado en la consola. Alternativa por adb: `herramientas/spotify-autorizar.py TU_CLIENT_ID`.
+queda guardado en la consola.
 
 ## Echo de Alexa
 
@@ -95,15 +95,4 @@ alexa-cookie2). El permiso queda en la consola y la sesión se renueva sola. Des
 - **Emparejar Bluetooth**: una vez, para el botón **🔊 Bocina**.
 
 Usa la API no oficial de Amazon (la misma de [alexa-remote2](https://github.com/Apollon77/alexa-remote)); puede dejar
-de funcionar si Amazon cambia algo. Alternativa por adb: iniciar sesión con `casa/alexa` (Node.js) y copiar la sesión
-con `herramientas/alexa-a-consola.py`.
-
-## Hub `casa` (opcional, avanzado)
-
-`casa/casa.py` es un servidor MCP en Python para controlar una computadora desde Monki. No hace falta para nada de lo
-anterior. Se conecta con el ajuste `mcp_servers` (`alias|http://IP:8800/mcp|CASA_TOKEN`); la clave se crea sola en
-`casa/.env`, que no se sube.
-
-## PPSSPP
-
-`configuracion/ppsspp/controls.ini` mapea los botones para los jugadores 1 a 3 (dispositivos 10, 11 y 12), y la cruceta también como teclas de Android (19 a 22). Va en `/storage/emulated/0/PSP/SYSTEM/controls.ini`. Cópialo **con PPSSPP cerrado**, porque PPSSPP reescribe el archivo al salir.
+de funcionar si Amazon cambia algo.

@@ -20,7 +20,9 @@ Kotlin, sin dependencias de UI externas, `minSdk 30` (Android 11). Todo vive en 
 | `Web.kt` | `internet.buscar` (DuckDuckGo), `internet.leer`, `internet.clima` (wttr.in) |
 | `Extras.kt` | Alarmas y recordatorios, memoria a largo plazo, rutinas |
 | `WakeOnLan.kt` | Prender computadoras de la red |
-| `McpClient.kt` / `McpServer.kt` | Cliente MCP (para usar `casa`) y servidor MCP propio en el puerto 8765 (para que otros usen la consola) |
+| `McpClient.kt` / `McpServer.kt` | Cliente MCP (para usar herramientas de otros servidores) y servidor MCP propio en el puerto 8765 (para que otros agentes usen la consola) |
+| `AlexaLogin.kt` | Inicio de sesión de Amazon dentro de la app |
+| `SetupServer.kt` | Formulario web para configurar desde el celular (puerto 8790, solo con la pantalla de configuración abierta) |
 | `EyesView.kt` | Cara animada: ojos con 20 expresiones, boca que sigue la voz y vaivén con música alegre |
 | `MainActivity.kt` | Ajustes, y configuración por `adb am start --es …` |
 | `Prefs.kt` | Preferencias y valores por defecto |
@@ -31,7 +33,7 @@ Kotlin, sin dependencias de UI externas, `minSdk 30` (Android 11). Todo vive en 
 palabra de activación (Vosk) → aviso sonoro → graba hasta 0.9 s de silencio
   → Whisper (Groq) transcribe; si tarda más de 8 s o falla, Gemini
   → responde el primer proveedor disponible, llamando herramientas las veces que haga falta
-  → voz: Edge (si hay un hub `casa`); si no, Gemini TTS; si no, Piper sin internet, por oraciones
+  → voz: Gemini TTS; si no, Piper sin internet, por oraciones
   → si el pedido fue por voz y no suena música, vuelve a escuchar (seguimiento: espera 4 s, graba máx. 10 s);
     luego a la palabra de activación
 ```
@@ -49,8 +51,8 @@ Para los proveedores con formato OpenAI se mandan solo los últimos 8 mensajes, 
 
 ### Puente de Alexa y Spotify en la consola
 
-- `AlexaClient.kt` hace lo mismo que `casa/alexa/alexa.js` contra `pitangui.amazon.com` con la sesión de Amazon copiada a la consola (`herramientas/alexa-a-consola.py`): órdenes de texto y volumen (`/api/behaviors/preview`), qué suena (`/api/np/list-media-sessions`), salto (`SeekCommand`, en segundos), alarmas (`/api/notifications`) y renovación de la sesión con el refresh token (`www.amazon.com.mx/ap/exchangetoken/cookies` + csrf). Expone las mismas herramientas `alexa_*`; si está configurado, Monki oculta las de `casa`. `echoCall()` usa el local y, si falla, el de `casa`.
-- `Spotify.kt`: Web API con PKCE (permiso de `herramientas/spotify-autorizar.py`, dura 180 días): dispositivos, transferir la reproducción, qué suena, play/pausa/siguiente/anterior/seek/volumen y tocar una canción dentro de su lista. La lista de canciones se lee de la página pública para insertar (`open.spotify.com/embed/…`).
+- `AlexaClient.kt` controla el Echo contra `pitangui.amazon.com` con la sesión de Amazon guardada en la consola: órdenes de texto y volumen (`/api/behaviors/preview`), qué suena (`/api/np/list-media-sessions`), salto (`SeekCommand`, en segundos), alarmas (`/api/notifications`) y renovación de la sesión con el refresh token (`www.amazon.com.mx/ap/exchangetoken/cookies` + csrf). Expone las herramientas `alexa_*`.
+- `Spotify.kt`: Web API con PKCE (permiso desde la pantalla de configuración: inicio de sesión en un WebView): dispositivos, transferir la reproducción, qué suena, play/pausa/siguiente/anterior/seek/volumen y tocar una canción dentro de su lista. La lista de canciones se lee de la página pública para insertar (`open.spotify.com/embed/…`).
 - El DNS de la consola es `dns.google` (DNS privado de Android): el del router no resolvía `i.scdn.co` (portadas).
 
 ### Modelo local
@@ -89,27 +91,18 @@ Vosk con el modelo pequeño de español no conoce "monki". La gramática acepta 
 - Sin "hey": `monkey`, `mon qui` o `mon ki` desde 0.8.
 - `mon`, `qui` y `moni` sueltos nunca lo despiertan: con el micrófono de la consola salían del ruido del cuarto y de los juegos.
 - La ganancia es automática, hasta ×4, para no saturar la voz.
-- Cada vez que oye algo, guarda los últimos 4 s en `Android/data/com.limber.asistente/files/wake-debug.wav`, para analizarlos con `herramientas/voz/`.
+- Cada vez que oye algo, guarda los últimos 4 s en `Android/data/com.limber.asistente/files/wake-debug.wav`.
 
-## Hub `casa` (opcional)
+## Echo de Alexa (detalles de la API)
 
-`casa/casa.py` es un servidor MCP (FastMCP, Streamable HTTP, sin estado) en `0.0.0.0:8800/mcp`. Exige `Authorization: Bearer CASA_TOKEN`, y la clave se genera en `.env` la primera vez. Es opcional: Monki funciona completo sin él.
+`AlexaClient.kt` usa la API no oficial de Amazon México (`amazon.com.mx`, servidor `pitangui.amazon.com`). La sesión se
+obtiene con `AlexaLogin.kt` (inicio de sesión en un WebView como la app de Alexa de iOS, PKCE y registro en
+`api.amazon.com/auth/register`) y se renueva sola con el permiso (`www.amazon.com.mx/ap/exchangetoken/cookies` + csrf).
 
-Herramientas: `red_escanear`; `pc_*`: estado, info, captura, abrir app o URL, apps abiertas, volumen, silencio, brillo, decir, notificar, música, teclado, ratón, portapapeles, ventanas, archivos y energía (reiniciar y apagar piden `confirmar=true`); `tv_*` (Chromecast/YouTube); `android_*` (celulares por adb); `focos_estado`; `alexa_*`: comando, decir, dispositivos, reproduciendo, control, saltar, volumen, alarma, alarmas y borrar_alarma; `spotify_lista` (canciones de una lista o álbum de Spotify).
-
-Además de MCP, `casa` atiende `POST /voz` (con la misma clave): recibe `{"texto": …}` y devuelve un MP3 con la voz neuronal de Edge (`es-MX-JorgeNeural`, tono −6 Hz) generada con `edge-tts`. También atiende `POST /portada` (`{"url": …}`): descarga la portada de la canción para la consola, solo desde hosts de portadas de Spotify y Amazon.
-
-### Puente de Alexa
-
-`casa/alexa/alexa.js` usa `alexa-remote2` con Amazon México (`amazon.com.mx`, servidor `pitangui.amazon.com`).
-
-- Escucha solo en `127.0.0.1:8801`. Rutas: `/estado`, `/dispositivos`, `/comando` (manda texto al Echo como si le hablaras), `/decir`, `/reproduciendo`, `/control`, `/saltar`, `/volumen`, `/alarmas`, `/alarma` y `/alarma-borrar`.
-- Alarmas: por orden de texto Alexa **no** las crea. `/alarma` usa la API de notificaciones: sin música, el formato nuevo (`/v1/alerts/alarms`); con música, el clásico (`PUT /api/notifications/null` con `type: MusicAlarm`, `musicEntity` y `provider: Spotify`), porque el nuevo ignora la música.
-- `/reproduciendo` usa `/api/np/list-media-sessions`: el `getPlayerInfo` clásico devuelve vacío cuando suena Spotify. `/control` manda órdenes de texto ("pausa", "siguiente canción"), porque `/api/np/command` no controla esas sesiones. `/saltar` sí usa `SeekCommand` de `/api/np/command`, con `mediaPosition` en **segundos** (en milisegundos se pasa del final y salta a la siguiente canción). `/volumen` recuerda el último nivel puesto, porque `getMedia` tarda en reflejarlo.
-- El inicio de sesión se hace en un proxy local (`127.0.0.1:3456`) y la sesión queda en `alexa-cookie.json`, con permisos 600.
-- El log filtra cookies y tokens.
-- `ALEXA_PRINCIPAL` indica qué Echo usar cuando no se nombra ninguno.
-
-## Agente de escritorio (`agente`)
-
-`agente/agente.py` es la primera versión: corre en una computadora con la API de Gemini y maneja la consola por adb, con capturas, toques y escritura. Hoy la app de la consola hace lo mismo sin necesitar la Mac.
+- Alarmas: por orden de texto Alexa **no** las crea. Con música se usa el formato clásico
+  (`PUT /api/notifications/null` con `type: MusicAlarm`, `musicEntity` y `provider: Spotify`), porque el nuevo
+  (`/v1/alerts/alarms`) ignora la música.
+- Qué suena: `/api/np/list-media-sessions` (el `getPlayerInfo` clásico devuelve vacío con Spotify). Pausa y siguiente
+  van como órdenes de texto, porque `/api/np/command` no controla esas sesiones. Adelantar usa `SeekCommand` con
+  `mediaPosition` en **segundos** (en milisegundos se pasa del final y salta a la siguiente canción).
+- El Echo principal (`alexa_principal`) es el que se usa cuando no se nombra ninguno.

@@ -1,22 +1,10 @@
-# Secretos: claves, sesión de Amazon, logs con datos de la casa
+# Secretos y logs
 .env
 *.env
-alexa-cookie.json
 *.log
 
-# Binarios, imágenes de sistema y respaldos (no van al repositorio)
-*.dmg
-*.img
-*.img.gz
-*.zip
+# APKs y binarios
 *.apk
-apks/
-arkos/
-rocknix/
-vosk/
-respaldo*/
-scratch-vosk/
-ppsspp/
 
 # Modelo de voz Vosk: se descarga con herramientas/descargar-modelo-vosk.sh
 asistente-apk/app/src/main/assets/model-es/
@@ -24,6 +12,7 @@ asistente-apk/app/src/main/assets/model-es/
 # Android / Gradle
 asistente-apk/build/
 asistente-apk/app/build/
+asistente-apk/app/.cxx/
 asistente-apk/.gradle/
 asistente-apk/local.properties
 .gradle/
@@ -31,13 +20,4 @@ asistente-apk/local.properties
 *.iml
 .kotlin/
 
-# Python / Node
-__pycache__/
-.venv/
-node_modules/
-
 .DS_Store
-modelos/
-asistente-apk/app/.cxx/
-darkos/
-roms-copia/

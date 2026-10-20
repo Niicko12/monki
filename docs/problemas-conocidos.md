@@ -24,7 +24,7 @@ Cosas que costó encontrar en la RG353V con Android 11. Cada una dice qué pasab
 
 **Por qué:** los modelos TTS de Gemini tienen muy poca cuota gratis al día y responden 429. La suscripción Gemini Pro (app) **no** aplica a la API.
 
-**Cómo quedó:** la voz principal es Edge (generada por `casa`); si no responde, Gemini; si falla (429), Piper sin internet, y no vuelve a intentar con Gemini en 30 minutos.
+**Cómo quedó:** la voz principal es Gemini; si falla (429), Piper sin internet, y no vuelve a intentar con Gemini en 30 minutos.
 
 ## Monki esperaba 8 s después de cada pedido por voz
 
@@ -58,20 +58,18 @@ Con el motor sherpa-onnx, cada `tts.language = …` recarga el modelo completo, 
 
 El micrófono por el conector de audífonos de la consola trae zumbido eléctrico de 60 y 180 Hz y casi nada por encima de 1 kHz. Ahí están las consonantes de "monki", por eso el modelo pierde el "qui" o el "hey".
 
-- Filtros (pasa-altos, *notch* y realce) **no** mejoraron el reconocimiento con audio real. Para probar, usa `herramientas/voz/`.
+- Filtros (pasa-altos, *notch* y realce) **no** mejoraron el reconocimiento con audio real.
 - Lo que sí funcionó: más variantes en la gramática, recordar el "hey" entre frases y umbrales por variante (ver [arquitectura](arquitectura.md#palabra-de-activación)).
 - Si hay zumbido, prueba la consola desconectada del cargador.
 
 ## Otros
 
-- **PPSSPP de fábrica** (1.11.3, modificado por Anbernic) está firmado distinto al oficial: para actualizarlo hay que desinstalarlo primero. Las partidas en `/storage/emulated/0/PSP` se conservan.
 - **Zona horaria:** Android 11 trae datos viejos y aplica horario de verano en México, que se eliminó en 2022. Usa una zona fija: `adb shell service call alarm 3 s16 Etc/GMT+6`.
 - **Ubicación por IP:** con doble NAT puede salir otra ciudad. Configura `location`.
 - **Selector de carpetas de Android:** ignora `adb input tap`; solo responde a la cruceta.
 - **`am force-stop com.limber.asistente` apaga la accesibilidad** (`accessibility_enabled` queda en 0). Para recuperarla: vaciar `enabled_accessibility_services`, volver a poner el servicio y `accessibility_enabled 1`.
 - **adb y `Android/data` en Android 11:** `adb push` dice que copió pero el archivo no aparece. Usa `/data/local/tmp` y `run-as`.
 - **wttr.in con user agent de navegador** devuelve HTML en vez de texto: el widget usa el de curl.
-- **`casa` colgado tras reiniciarlo:** con `uv run casa.py` en el LaunchAgent, `launchctl kickstart -k` mataba a `uv` pero no al Python hijo, que se quedaba con el puerto 8800 sin responder (`address already in use` en el log). El LaunchAgent ahora lanza `.venv/bin/python casa.py` directo.
-- **Alexa no crea alarmas por orden de texto:** "pon una alarma…" enviado como texto no hace nada. `alexa.js` usa la API de notificaciones (ver [arquitectura](arquitectura.md)).
+- **Alexa no crea alarmas por orden de texto:** "pon una alarma…" enviado como texto no hace nada. Monki usa la API de notificaciones (ver [arquitectura](arquitectura.md)).
 - **El DNS de algunos routers no resuelve `i.scdn.co`** (portadas de Spotify): con DNS privado `dns.google` en Ajustes → Red se resuelve.
 - **Spotify en los Echo:** `getPlayerInfo` devuelve todo vacío; la información está en `/api/np/list-media-sessions`.
