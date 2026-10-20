@@ -2,7 +2,7 @@
 
 # Monki
 
-### Asistente de voz con cara para consolas Android
+### Asistente de voz con cara para la consola Anbernic RG353V
 
 Lo despiertas con *"hey monki"*, te entiende en español y **actúa**: contesta, busca en internet, maneja la consola,
 pone música y alarmas en tu Echo y reproduce YouTube en su propia pantalla.
@@ -34,6 +34,38 @@ pone música y alarmas en tu Echo y reproduce YouTube en su propia pantalla.
   batería y la música o el video que suena. Ese ánimo tiñe toda la interfaz.
 - **Hecho para un control.** Se usa con la cruceta y los botones, o tocando la pantalla.
 
+
+---
+
+## La consola
+
+<img src="docs/imagenes/consola-rg353v.png" width="300" align="right" alt="Ilustración de la Anbernic RG353V con Monki en la pantalla: cruceta a la izquierda, botones X Y A B a la derecha, dos palancas abajo">
+
+Monki está hecho y probado en la **Anbernic RG353V**, una consola portátil vertical con Android. Funciona en otras
+consolas o tabletas con Android 11 o más reciente, con micrófono y WiFi.
+
+| | Anbernic RG353V |
+|---|---|
+| Procesador | Rockchip RK3566, 4 núcleos Cortex-A55 a 1.8 GHz, GPU Mali-G52 |
+| Memoria | 2 GB de RAM, 32 GB internos y dos ranuras microSD |
+| Pantalla | 3.5" IPS táctil de 640 × 480 (Monki está diseñado para esta resolución) |
+| Conexión | WiFi 2.4/5 GHz y Bluetooth 4.2 |
+| Batería | 3500 mAh |
+| Sistema | Android 11 |
+
+**Controles en Monki:**
+
+| Botón | Acción |
+|---|---|
+| **X** | Hablar |
+| **B** | Interrumpir, cerrar el video o el detalle |
+| **A** | Elegir |
+| Cruceta | Moverse entre widgets, videos, canciones y botones |
+| Volumen | Volumen del Echo o de la consola, según dónde suene |
+
+<sub>Ilustración propia; la pantalla es una captura real de Monki.</sub>
+
+<br clear="right">
 ---
 
 ## Instalar en 3 pasos
