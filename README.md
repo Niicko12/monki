@@ -49,17 +49,63 @@ pone música y alarmas en tu Echo y reproduce YouTube en su propia pantalla.
    - En la consola, toca **Activar accesibilidad** y **Permitir micrófono**.
 3. Di ***"hey monki"***.
 
-**Conexiones (opcional), en la misma pantalla y sin cables:**
-
-- **Echo de Alexa:** toca **Iniciar sesión** y entra con tu cuenta de Amazon; luego **Elegir Echo** y
-  **Emparejar Bluetooth** para el botón 🔊 Bocina.
-- **Spotify:** pega en el formulario del celular el Client ID de una app gratis de
-  [Spotify for Developers](https://developer.spotify.com/dashboard) (Redirect URI `http://127.0.0.1:8899/callback`) y
-  toca **Conectar** en la consola.
-- **Sin internet:** botón **Descargar** (≈ 430 MB) para que conteste aunque no haya red.
+Para usar tu Echo, Spotify o el modo sin internet, ve a [Conexiones](#conexiones).
 
 <br clear="right">
 
+
+---
+
+## Configuración
+
+Todo se configura en la pantalla de la app. Nada requiere computadora ni cables.
+
+### Desde el celular
+
+<img src="docs/imagenes/monki-celular.png" width="300" align="right" alt="Formulario de configuración de Monki abierto en el celular: claves de IA con botón Obtener, nombre, ciudad y Client ID de Spotify">
+
+Escribir claves largas con el teclado de la consola es tedioso. Por eso la pantalla de configuración muestra un
+**código QR**: escanéalo con la cámara del celular (conectado a la misma WiFi) y se abre este formulario.
+
+- **Claves de IA:** pega una o varias. **Obtener** abre la página para crear cada una gratis.
+- **Tu nombre y tu ciudad:** para saludarte y darte el clima.
+- **Client ID de Spotify:** si quieres usar Spotify.
+- Un campo vacío no borra lo que ya estaba guardado; junto a cada clave ves si ya hay una.
+
+El formulario lo sirve la propia consola **solo mientras la pantalla de configuración está abierta**, y pide una clave
+aleatoria que va dentro del QR: nadie más en tu red puede cambiar tus datos.
+
+<br clear="right">
+
+### Conexiones
+
+<p align="center">
+  <img src="docs/imagenes/monki-conexiones.png" width="560" alt="Sección Conexiones: Echo de Alexa con Cambiar cuenta, Elegir Echo y Emparejar Bluetooth, y Spotify con Conectar">
+</p>
+
+| Conexión | Cómo se conecta | Para qué |
+|---|---|---|
+| **Echo de Alexa** | **Iniciar sesión** abre Amazon dentro de Monki. Luego **Elegir Echo** | Música, alarmas con Spotify y volumen en tu Echo |
+| **Bluetooth del Echo** | **Emparejar Bluetooth**, una sola vez | Botón **🔊 Bocina**: el audio de la consola sale por el Echo |
+| **Spotify** | Client ID de una app gratis de [Spotify for Developers](https://developer.spotify.com/dashboard) (Redirect URI `http://127.0.0.1:8899/callback`) y **Conectar** | Reproductor, lista de canciones y pasar la música entre el Echo y la consola |
+| **Sin internet** | **Descargar** (≈ 430 MB) | Contestar sin red o cuando se acaban las cuotas |
+
+### Opciones avanzadas
+
+Ocultas por defecto, en **Mostrar opciones avanzadas**:
+
+| Opción | Qué hace |
+|---|---|
+| Personalidad | Cómo habla Monki (por defecto, mayordomo educado con humor seco) |
+| Color | `ánimo` (cambia con el ánimo y lo que suena) o uno fijo: verde, azul, cian, morado, rosa, rojo, naranja, amarillo, blanco o `#RRGGBB` |
+| Palabra de activación | La palabra que lo despierta (por defecto *monkey*, que suena como "monki") |
+| Voz | Voz de Gemini (Charon, Orus, Kore, Puck…) |
+| Siempre escuchando | Mantiene el oído atento a la palabra de activación |
+| Responder en voz alta | Si lo apagas, solo contesta en pantalla |
+| Burbuja flotante | Burbuja con la cara para abrir Monki desde cualquier app |
+| Control por MCP | Permite que otros agentes de tu red manejen la consola (muestra dirección y clave) |
+
+Todos los ajustes también se pueden poner por adb: ver [Configuración](docs/configuracion.md).
 ---
 
 ## Funciones
