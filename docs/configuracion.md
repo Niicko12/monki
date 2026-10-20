@@ -2,6 +2,15 @@
 
 ## Monki en la consola
 
+### Desde el celular
+
+La pantalla de configuración muestra un **código QR**. Escanéalo con el celular (misma WiFi) y se abre un formulario
+para pegar las claves de IA, tu nombre, tu ciudad y el Client ID de Spotify. Lo sirve la propia consola
+(`SetupServer.kt`, puerto 8790) **solo mientras la pantalla de configuración está abierta**, y cada petición debe traer
+la clave aleatoria que va en el QR. Un campo vacío no borra lo que ya estaba guardado.
+
+### Por adb
+
 Todo se puede poner desde la pantalla de ajustes de la app o por adb, sin recompilar:
 
 ```bash
@@ -78,18 +87,16 @@ queda guardado en la consola. Alternativa por adb: `herramientas/spotify-autoriz
 
 ## Echo de Alexa
 
-Monki controla el Echo con la API no oficial de Amazon (la misma de
-[alexa-remote2](https://github.com/Apollon77/alexa-remote)); puede dejar de funcionar si Amazon cambia algo.
-La sesión de Amazon se obtiene **una sola vez** con el puente de `casa/alexa` (Node.js) en cualquier computadora con la
-consola conectada por USB, y luego se renueva sola en la consola:
+En la pantalla de configuración, **Conexiones → Echo de Alexa → Iniciar sesión**: se abre el inicio de sesión de
+Amazon dentro de Monki (como la app de Alexa: PKCE y registro en `api.amazon.com/auth/register`, igual que
+alexa-cookie2). El permiso queda en la consola y la sesión se renueva sola. Después:
 
-```bash
-cd casa/alexa && npm install && node alexa.js     # abre http://127.0.0.1:3456 e inicia sesión en Amazon
-python3 herramientas/alexa-a-consola.py "Nombre de tu Echo"
-```
+- **Elegir Echo**: el Echo que usa por defecto (si no eliges, toma el primero en línea).
+- **Emparejar Bluetooth**: una vez, para el botón **🔊 Bocina**.
 
-`casa/alexa/alexa-cookie.json` es la sesión de Amazon: **secreto**, no lo subas ni lo compartas. Para el botón
-**🔊 Bocina**, empareja una vez: *"hey monki, empareja la consola con el Echo"*.
+Usa la API no oficial de Amazon (la misma de [alexa-remote2](https://github.com/Apollon77/alexa-remote)); puede dejar
+de funcionar si Amazon cambia algo. Alternativa por adb: iniciar sesión con `casa/alexa` (Node.js) y copiar la sesión
+con `herramientas/alexa-a-consola.py`.
 
 ## Hub `casa` (opcional, avanzado)
 

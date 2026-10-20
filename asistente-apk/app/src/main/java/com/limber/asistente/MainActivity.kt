@@ -20,12 +20,15 @@ class MainActivity : Activity() {
     private companion object {
         const val LOCAL_MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf"
         const val SPOTIFY_REDIRECT = "http://127.0.0.1:8899/callback"
+        /** Familias de equipos de Amazon que son bocinas o pantallas Echo. */
+        val ECHO_FAMILIES = setOf("ECHO", "KNIGHT", "ROOK")
         const val SPOTIFY_SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing"
     }
 
     private lateinit var prefs: Prefs
     private lateinit var status: TextView
     private lateinit var mcpInfo: TextView
+    private val setup by lazy { SetupServer(prefs) { runOnUiThread { recreate() } } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,7 +76,26 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        setup.start()
         refreshStatus()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        setup.stop()
+    }
+
+    private fun wifiIp(): String? = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }.firstOrNull { it is java.net.Inet4Address }?.hostAddress
+    }.getOrNull()
+
+    /** Código QR (blanco y negro) de [text], de [size] px. */
+    private fun qr(text: String, size: Int): android.graphics.Bitmap {
+        val m = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
+            mapOf(com.google.zxing.EncodeHintType.MARGIN to 1))
+        val px = IntArray(size * size) { if (m[it % size, it / size]) Color.BLACK else Color.WHITE }
+        return android.graphics.Bitmap.createBitmap(px, size, size, android.graphics.Bitmap.Config.ARGB_8888)
     }
 
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -128,6 +150,18 @@ class MainActivity : Activity() {
         status = text("", 14f)
         col.addView(status)
 
+        // Desde el celular: escanear el QR abre un formulario para pegar las claves
+        wifiIp()?.let { ip ->
+            val url = "http://$ip:${SetupServer.PORT}/?t=${setup.token}"
+            val phone = card("📱 Configura desde tu celular", "Escanea el código con la cámara del celular (misma WiFi) y pega tus claves allí. Es más fácil que escribirlas aquí.")
+            phone.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                addView(android.widget.ImageView(this@MainActivity).apply { setImageBitmap(qr(url, dp(130))) }, LinearLayout.LayoutParams(dp(130), dp(130)))
+                addView(text("O abre en el navegador:\n$url", 12f, "#9AA6A1").apply { setPadding(dp(12), 0, 0, 0); setTextIsSelectable(true) },
+                    LinearLayout.LayoutParams(0, -2, 1f))
+            })
+        }
+
         // Paso 1: claves de IA
         val ia = card("1 · Inteligencia (gratis)", "Pega al menos una clave. Con varias, Monki casi nunca se queda sin respuesta.")
         val groq = field(prefs.groqKey, "Clave de Groq (recomendada)", secret = true)
@@ -152,19 +186,37 @@ class MainActivity : Activity() {
             button("Permitir micrófono") { requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1) },
         ))
 
-        // Extras
-        val local = card("Sin internet (opcional)", "Descarga un modelo pequeño (≈ 430 MB) para que Monki conteste aunque no haya internet o se acaben las cuotas.")
-        val localStatus = text(if (localModel().exists()) "✅ Modelo instalado" else "No instalado", 13f)
-        local.addView(row(localStatus, button(if (localModel().exists()) "Volver a descargar" else "Descargar") { downloadModel(localStatus) }))
+        // Conexiones: todo se conecta desde aquí, sin cables ni computadora
+        val con = card("4 · Conexiones (opcional)", "Conecta tus servicios iniciando sesión aquí mismo.")
+        fun section(title: String, desc: String) {
+            con.addView(text(title, 14f, "#E4E9E6").apply { typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0, dp(10), 0, 0) })
+            con.addView(text(desc, 12f, "#9AA6A1"))
+        }
 
-        val spot = card("Spotify (opcional)", "Crea una app gratis en developer.spotify.com con la Redirect URI $SPOTIFY_REDIRECT y pega aquí su Client ID.")
+        section("🔊 Echo de Alexa", "Música, alarmas y volumen en tu Echo. Inicia sesión con tu cuenta de Amazon.")
+        val echoStatus = text(echoState(), 13f)
+        con.addView(row(echoStatus, button(if (prefs.alexaRefresh.isNotBlank()) "Cambiar cuenta" else "Iniciar sesión") { connectAlexa(echoStatus) }))
+        con.addView(row(
+            button("Elegir Echo") { chooseEcho(echoStatus) },
+            button("Emparejar Bluetooth") {
+                val svc = AgentService.instance
+                if (svc == null) echoStatus.text = "Activa primero la accesibilidad"
+                else { svc.audioCommand("emparejar"); echoStatus.text = "Emparejando con el Echo… acepta en el Echo si lo pide" }
+            },
+        ))
+
+        section("🎵 Spotify", "Crea una app gratis en developer.spotify.com con la Redirect URI $SPOTIFY_REDIRECT y pega su Client ID.")
         val spotifyId = field(prefs.spotifyClientId, "Client ID de Spotify")
         val spotifyStatus = text(if (prefs.spotifyRefresh.isNotBlank()) "✅ Conectado" else "Sin conectar", 13f)
-        spot.addView(row(spotifyId, button("Conectar") {
+        con.addView(row(spotifyId, button("Conectar") {
             prefs.spotifyClientId = spotifyId.text.toString().trim()
             if (prefs.spotifyClientId.isBlank()) spotifyStatus.text = "Pega primero el Client ID" else connectSpotify(spotifyStatus)
         }))
-        spot.addView(spotifyStatus)
+        con.addView(spotifyStatus)
+
+        section("📴 Sin internet", "Modelo pequeño (≈ 430 MB) para contestar sin red o cuando se acaban las cuotas.")
+        val localStatus = text(if (localModel().exists()) "✅ Modelo instalado" else "No instalado", 13f)
+        con.addView(row(localStatus, button(if (localModel().exists()) "Volver a descargar" else "Descargar") { downloadModel(localStatus) }))
 
         // Avanzado
         val adv = card("Avanzado")
@@ -233,6 +285,70 @@ class MainActivity : Activity() {
     }
 
     private fun localModel() = java.io.File(filesDir, "llm.gguf")
+
+    private fun echoState() = when {
+        prefs.alexaRefresh.isBlank() -> "Sin conectar"
+        prefs.alexaPrincipal.isNotBlank() -> "✅ Conectado · ${prefs.alexaPrincipal}"
+        else -> "✅ Conectado"
+    }
+
+    /** Inicia sesión en Amazon dentro de la app y deja listo el control del Echo. */
+    private fun connectAlexa(status: TextView) {
+        val login = AlexaLogin(prefs)
+        val cm = android.webkit.CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.removeAllCookies(null)
+        listOf("frc=${login.frc}", "map-md=${login.mapMd}").forEach { cm.setCookie("https://www.${AlexaLogin.LOGIN_PAGE}", "$it; Domain=.${AlexaLogin.LOGIN_PAGE}; Path=/; Secure") }
+        lateinit var dialog: android.app.Dialog
+        var done = false
+        fun handle(url: String): Boolean {
+            val code = login.codeFrom(url) ?: return false
+            if (done) return true
+            done = true
+            dialog.dismiss()
+            val cookies = cm.getCookie("https://www.${AlexaLogin.LOGIN_PAGE}").orEmpty()
+            status.text = "Conectando con tu Echo…"
+            Thread {
+                val msg = runCatching { login.register(code, cookies); pickDefaultEcho(); echoState() }
+                    .getOrElse { "No se pudo conectar: ${it.message}" }
+                runOnUiThread { status.text = msg; AgentService.instance?.refreshFace() }
+            }.start()
+            return true
+        }
+        val web = android.webkit.WebView(this).apply {
+            settings.javaScriptEnabled = true; settings.domStorageEnabled = true
+            settings.userAgentString = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 PitanguiBridge/2.2.651540.0-[HARDWARE=iPhone14_7][SOFTWARE=18.3.1][DEVICE=iPhone]"
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: android.webkit.WebView, req: android.webkit.WebResourceRequest) = handle(req.url.toString())
+                override fun onPageStarted(view: android.webkit.WebView, url: String, favicon: android.graphics.Bitmap?) { if (handle(url)) view.stopLoading() }
+            }
+            loadUrl(login.loginUrl)
+        }
+        dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply { setContentView(web); show() }
+    }
+
+    /** Si no hay Echo elegido, toma el primero en línea. */
+    private fun pickDefaultEcho() {
+        if (prefs.alexaPrincipal.isNotBlank()) return
+        val echos = runCatching { AlexaClient(prefs).devices().filter { it.online && it.family.uppercase() in ECHO_FAMILIES } }.getOrDefault(emptyList())
+        echos.firstOrNull()?.let { prefs.alexaPrincipal = it.name }
+    }
+
+    /** Lista los Echo de la cuenta para elegir el principal. */
+    private fun chooseEcho(status: TextView) {
+        if (prefs.alexaRefresh.isBlank()) { status.text = "Inicia sesión primero"; return }
+        status.text = "Buscando tus Echo…"
+        Thread {
+            val names = runCatching { AlexaClient(prefs).devices().filter { it.family.uppercase() in ECHO_FAMILIES }.map { it.name } }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (names.isEmpty()) { status.text = "No encontré Echo en tu cuenta"; return@runOnUiThread }
+                status.text = echoState()
+                android.app.AlertDialog.Builder(this).setTitle("¿Qué Echo uso?")
+                    .setItems(names.toTypedArray()) { _, i -> prefs.alexaPrincipal = names[i]; status.text = echoState() }
+                    .show()
+            }
+        }.start()
+    }
 
     /** Descarga el modelo local (Qwen2.5 0.5B) a files/llm.gguf, con avance en pantalla. */
     private fun downloadModel(status: TextView) {

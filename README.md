@@ -38,23 +38,25 @@ pone música y alarmas en tu Echo y reproduce YouTube en su propia pantalla.
 
 ## Instalar en 3 pasos
 
-<img src="docs/imagenes/monki-configuracion.png" width="420" align="right" alt="Pantalla de configuración de Monki: estado, claves de IA con botón Obtener, datos del usuario y permisos">
+<img src="docs/imagenes/monki-configuracion.png" width="420" align="right" alt="Pantalla de configuración de Monki con el código QR para configurarla desde el celular">
 
 1. **Descarga** `Monki.apk` desde [Releases](https://github.com/Niicko12/monki/releases/latest) e instálalo en la consola
    (ábrelo desde el administrador de archivos y permite "instalar apps desconocidas").
 2. **Abre Monki** y sigue la pantalla de configuración:
-   - Pega una clave gratis de IA. El botón **Obtener** abre la página para crearla; con
-     [Groq](https://console.groq.com/keys) basta.
-   - Escribe tu nombre y tu ciudad.
-   - Toca **Activar accesibilidad** y **Permitir micrófono**.
-3. Toca **Guardar** y di ***"hey monki"***.
+   - **Escanea el código QR con tu celular** (misma WiFi): se abre un formulario donde pegas tus claves cómodamente.
+     El botón **Obtener** junto a cada una abre la página para crearla gratis; con
+     [Groq](https://console.groq.com/keys) basta. Escribe también tu nombre y tu ciudad.
+   - En la consola, toca **Activar accesibilidad** y **Permitir micrófono**.
+3. Di ***"hey monki"***.
 
-**Opcionales, desde la misma pantalla:**
+**Conexiones (opcional), en la misma pantalla y sin cables:**
 
+- **Echo de Alexa:** toca **Iniciar sesión** y entra con tu cuenta de Amazon; luego **Elegir Echo** y
+  **Emparejar Bluetooth** para el botón 🔊 Bocina.
+- **Spotify:** pega en el formulario del celular el Client ID de una app gratis de
+  [Spotify for Developers](https://developer.spotify.com/dashboard) (Redirect URI `http://127.0.0.1:8899/callback`) y
+  toca **Conectar** en la consola.
 - **Sin internet:** botón **Descargar** (≈ 430 MB) para que conteste aunque no haya red.
-- **Spotify:** pega el Client ID de una app gratis de [Spotify for Developers](https://developer.spotify.com/dashboard)
-  (Redirect URI `http://127.0.0.1:8899/callback`) y toca **Conectar**.
-- **Echo de Alexa:** ver la [guía del Echo](docs/configuracion.md#echo-de-alexa).
 
 <br clear="right">
 

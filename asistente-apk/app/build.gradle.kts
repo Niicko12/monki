@@ -11,8 +11,8 @@ android {
         applicationId = "com.limber.asistente"
         minSdk = 30
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.1"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release") } }
     }
@@ -42,4 +42,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+    implementation("com.google.zxing:core:3.5.3")
 }
