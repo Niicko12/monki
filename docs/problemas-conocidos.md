@@ -71,4 +71,7 @@ El micrófono por el conector de audífonos de la consola trae zumbido eléctric
 - **`am force-stop com.limber.asistente` apaga la accesibilidad** (`accessibility_enabled` queda en 0). Para recuperarla: vaciar `enabled_accessibility_services`, volver a poner el servicio y `accessibility_enabled 1`.
 - **adb y `Android/data` en Android 11:** `adb push` dice que copió pero el archivo no aparece. Usa `/data/local/tmp` y `run-as`.
 - **wttr.in con user agent de navegador** devuelve HTML en vez de texto: el widget usa el de curl.
+- **`casa` colgado tras reiniciarlo:** con `uv run casa.py` en el LaunchAgent, `launchctl kickstart -k` mataba a `uv` pero no al Python hijo, que se quedaba con el puerto 8800 sin responder (`address already in use` en el log). El LaunchAgent ahora lanza `.venv/bin/python casa.py` directo.
+- **Alexa no crea alarmas por orden de texto:** "pon una alarma…" enviado como texto no hace nada. `alexa.js` usa la API de notificaciones (ver [arquitectura](arquitectura.md)).
+- **El DNS del router no resuelve `i.scdn.co`** (portadas de Spotify) desde la consola, aunque la Mac sí: la portada se pide a `casa` (`POST /portada`).
 - **Spotify en los Echo:** `getPlayerInfo` devuelve todo vacío; la información está en `/api/np/list-media-sessions`.

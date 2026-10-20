@@ -55,7 +55,13 @@ Para los proveedores con formato OpenAI se mandan solo los últimos 8 mensajes, 
 - `Mood` guarda alegría (−10 a 10) y molestia (0 a 10). Cada respuesta las mueve según su emoción y vuelven solas a "tranquilo" (1 punto cada 15 min). Noche o batería ≤15 % = cansado; 45 min sin uso = aburrido.
 - Durante 30 s la cara muestra la emoción de la última respuesta; después, el ánimo.
 - Con música sonando, Groq clasifica cada canción nueva por título y artista; la cara usa ese ánimo y su color, y se mece si es feliz o emocionado.
-- Widgets cada 15 s; clima cada 20 min (wttr.in); computadoras cada minuto (`pc_info corto=true`); reproductor cada 10 s (`alexa_reproduciendo`).
+- Widgets cada 15 s; clima cada 20 min (wttr.in); computadoras cada minuto (`pc_info formato=json`: modelo, batería, disco, CPU, RAM); reproductor cada 10 s (`alexa_reproduciendo`). Los widgets y los botones principales usan el color del ánimo (el de la canción si suena música).
+- Las alarmas que pides a Monki van al Echo (`alexa_alarma`); el widget muestra la próxima del Echo y, al tocarlo, todas.
+- Al tocar el reproductor aparece la lista de canciones de lo que suena (`spotify_lista`: `casa` lee la página pública de Spotify para insertar listas, `open.spotify.com/embed/…`); tocar una canción se la pide al Echo.
+- Al escribir con el teclado aparece "← Volver" y se ocultan "Hablar" y el reproductor.
+- Al tocar un widget (o A con la cruceta) su detalle aparece en el lugar de la cara: estado de la consola, clima y pronóstico, alarmas o la información completa de la computadora. Se cierra solo a los 20 s, tocándolo o con B.
+- Reproductor: portada (vía `casa`), fondo con el color de la portada, barra arrastrable (o cruceta) que llama a `alexa_saltar`, y los botones de volumen de la consola controlan el Echo (`alexa_volumen`, de 5 en 5) mientras el panel está abierto y suena música.
+- La ventana del panel mide la pantalla menos la barra de estado: empieza debajo de ella, y con la altura completa la fila de abajo quedaba fuera.
 
 ### Palabra de activación
 
@@ -63,8 +69,9 @@ Vosk con el modelo pequeño de español no conoce "monki". La gramática acepta 
 
 - Con "hey" delante, aunque llegue en otra frase dentro de 3 s, basta una seguridad de 0.3.
 - **Mientras Monki habla** (y 1.5 s después) su voz entra al micrófono: solo cuenta "hey" (≥0.5) seguido del nombre (≥0.35), y nunca "mon" suelto.
-- Sin "hey": `mon qui` o `mon ki` desde 0.5, `mon` o `monkey` desde 0.7.
-- `qui` y `moni` sueltos nunca lo despiertan, porque el ruido de los juegos los produce.
+- Con "hey" delante, `mon` necesita 0.5 (es una sílaba muy común).
+- Sin "hey": `monkey`, `mon qui` o `mon ki` desde 0.8.
+- `mon`, `qui` y `moni` sueltos nunca lo despiertan: con el micrófono de la consola salían del ruido del cuarto y de los juegos.
 - La ganancia es automática, hasta ×4, para no saturar la voz.
 - Cada vez que oye algo, guarda los últimos 4 s en `Android/data/com.limber.asistente/files/wake-debug.wav`, para analizarlos con `herramientas/voz/`.
 
@@ -72,16 +79,17 @@ Vosk con el modelo pequeño de español no conoce "monki". La gramática acepta 
 
 `casa/casa.py` es un servidor MCP (FastMCP, Streamable HTTP, sin estado) en `0.0.0.0:8800/mcp`. Exige `Authorization: Bearer CASA_TOKEN`, y la clave se genera en `.env` la primera vez. Funciona en macOS y en Windows (`instalar-windows.ps1`).
 
-Herramientas: `red_escanear`; `pc_*`: estado, info, captura, abrir app o URL, apps abiertas, volumen, silencio, brillo, decir, notificar, música, teclado, ratón, portapapeles, ventanas, archivos y energía (reiniciar y apagar piden `confirmar=true`); `tv_*` (Chromecast/YouTube); `android_*` (celulares por adb); `focos_estado`; `alexa_*`: comando, decir, dispositivos, reproduciendo y control.
+Herramientas: `red_escanear`; `pc_*`: estado, info, captura, abrir app o URL, apps abiertas, volumen, silencio, brillo, decir, notificar, música, teclado, ratón, portapapeles, ventanas, archivos y energía (reiniciar y apagar piden `confirmar=true`); `tv_*` (Chromecast/YouTube); `android_*` (celulares por adb); `focos_estado`; `alexa_*`: comando, decir, dispositivos, reproduciendo, control, saltar, volumen, alarma, alarmas y borrar_alarma; `spotify_lista` (canciones de una lista o álbum de Spotify).
 
-Además de MCP, `casa` atiende `POST /voz` (con la misma clave): recibe `{"texto": …}` y devuelve un MP3 con la voz neuronal de Edge (`es-MX-JorgeNeural`, tono −6 Hz) generada con `edge-tts`.
+Además de MCP, `casa` atiende `POST /voz` (con la misma clave): recibe `{"texto": …}` y devuelve un MP3 con la voz neuronal de Edge (`es-MX-JorgeNeural`, tono −6 Hz) generada con `edge-tts`. También atiende `POST /portada` (`{"url": …}`): descarga la portada de la canción para la consola, solo desde hosts de portadas de Spotify y Amazon.
 
 ### Puente de Alexa
 
 `casa/alexa/alexa.js` usa `alexa-remote2` con Amazon México (`amazon.com.mx`, servidor `pitangui.amazon.com`).
 
-- Escucha solo en `127.0.0.1:8801`. Rutas: `/estado`, `/dispositivos`, `/comando` (manda texto al Echo como si le hablaras), `/decir`, `/reproduciendo` y `/control`.
-- `/reproduciendo` usa `/api/np/list-media-sessions`: el `getPlayerInfo` clásico devuelve vacío cuando suena Spotify. `/control` manda órdenes de texto ("pausa", "siguiente canción"), porque `/api/np/command` no controla esas sesiones.
+- Escucha solo en `127.0.0.1:8801`. Rutas: `/estado`, `/dispositivos`, `/comando` (manda texto al Echo como si le hablaras), `/decir`, `/reproduciendo`, `/control`, `/saltar`, `/volumen`, `/alarmas`, `/alarma` y `/alarma-borrar`.
+- Alarmas: por orden de texto Alexa **no** las crea. `/alarma` usa la API de notificaciones: sin música, el formato nuevo (`/v1/alerts/alarms`); con música, el clásico (`PUT /api/notifications/null` con `type: MusicAlarm`, `musicEntity` y `provider: Spotify`), porque el nuevo ignora la música.
+- `/reproduciendo` usa `/api/np/list-media-sessions`: el `getPlayerInfo` clásico devuelve vacío cuando suena Spotify. `/control` manda órdenes de texto ("pausa", "siguiente canción"), porque `/api/np/command` no controla esas sesiones. `/saltar` sí usa `SeekCommand` de `/api/np/command`, con `mediaPosition` en **segundos** (en milisegundos se pasa del final y salta a la siguiente canción). `/volumen` recuerda el último nivel puesto, porque `getMedia` tarda en reflejarlo.
 - El inicio de sesión se hace en un proxy local (`127.0.0.1:3456`) y la sesión queda en `alexa-cookie.json`, con permisos 600.
 - El log filtra cookies y tokens.
 - `ALEXA_PRINCIPAL` indica qué Echo usar cuando no se nombra ninguno.

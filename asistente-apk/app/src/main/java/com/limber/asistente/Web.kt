@@ -45,8 +45,9 @@ object Web {
     fun weather(place: String, home: String): String {
         val q = URLEncoder.encode(place.ifBlank { home }, "UTF-8").replace("+", "%20")
         val fmt = URLEncoder.encode("%l: %C, %t (sensación %f), humedad %h, viento %w, lluvia %p", "UTF-8").replace("+", "%20")
-        val now = get("https://wttr.in/$q?format=$fmt&lang=es").trim()
-        val days = runCatching { get("https://wttr.in/$q?format=%25C+%25t&lang=es&2").trim() }.getOrDefault("")
+        // Con user agent de navegador wttr.in devuelve una página HTML; con el de curl, texto
+        val now = get("https://wttr.in/$q?format=$fmt&lang=es", ua = "curl/8.0").trim()
+        val days = runCatching { get("https://wttr.in/$q?format=%25C+%25t&lang=es&2", ua = "curl/8.0").trim() }.getOrDefault("")
         return "Ahora: $now" + if (days.isNotBlank() && days.length < 300) "\nPronóstico: $days" else ""
     }
 

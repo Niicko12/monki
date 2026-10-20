@@ -261,17 +261,40 @@ def pc_musica(accion: str) -> str:
     return f"{accion} enviado."
 
 
+def _modelo() -> str:
+    """Nombre del equipo para mostrar ("MacBook Air", "PC Windows"); se calcula una vez."""
+    global _MODELO
+    if "_MODELO" not in globals():
+        nombre = ""
+        if ES_MAC:
+            for linea in sh("system_profiler", "SPHardwareDataType", timeout=15).splitlines():
+                if "Model Name" in linea:
+                    nombre = linea.split(":", 1)[1].strip()
+        elif ES_WIN:
+            nombre = ps("(Get-CimInstance Win32_ComputerSystemProduct).Name") or "PC Windows"
+        _MODELO = nombre or ("Mac" if ES_MAC else "PC")
+    return _MODELO
+
+
 @mcp.tool(name="pc_info")
-def pc_info(corto: bool = False) -> str:
-    """CPU, memoria, disco, batería, IP y tiempo encendida de esta computadora. corto=true: una línea para widgets."""
+def pc_info(corto: bool = False, formato: str = "texto") -> str:
+    """CPU, memoria, disco, batería, IP y tiempo encendida de esta computadora. corto=true: una línea para widgets;
+    formato="json": datos para el widget de la consola."""
+    import json
     import psutil
     cpu = psutil.cpu_percent(interval=0.5)
     ram = psutil.virtual_memory().percent
     b = psutil.sensors_battery()
     bat = f"{int(b.percent)}%{'⚡' if b.power_plugged else ''}" if b else "enchufada"
+    disco = psutil.disk_usage("C:\\" if ES_WIN else "/")
+    if formato == "json":
+        return json.dumps({
+            "modelo": _modelo(), "sistema": "macOS" if ES_MAC else "Windows" if ES_WIN else sys.platform,
+            "bateria": int(b.percent) if b else None, "cargando": bool(b and b.power_plugged),
+            "cpu": round(cpu), "ram": round(ram), "disco_libre_gb": round(disco.free / 1e9),
+        })
     if corto:
         return f"🔋{bat} · CPU {cpu:.0f}% · RAM {ram:.0f}%"
-    disco = psutil.disk_usage("C:\\" if ES_WIN else "/")
     horas = (time.time() - psutil.boot_time()) / 3600
     import socket
     try:
@@ -633,6 +656,70 @@ def alexa_control(accion: str, nivel: int = 50, dispositivo: str = "") -> str:
     return f"Listo: {accion}." if '"dispositivo"' in r else r
 
 
+@mcp.tool(name="alexa_alarma")
+def alexa_alarma(fecha: str, hora: str, musica: str = "", dispositivo: str = "") -> str:
+    """Pone una alarma en el Echo. fecha AAAA-MM-DD, hora HH:MM (24 h). musica: lo que debe sonar en Spotify
+    (artista, canción o lista, p. ej. "Nirvana"); vacío = tono normal. Dispositivo vacío = el Echo principal."""
+    import json
+    r = _alexa("/alarma", fecha=fecha, hora=hora, musica=musica, dispositivo=dispositivo)
+    try:
+        d = json.loads(r)
+        return f"Alarma puesta en {d['dispositivo']} el {d['fecha']} a las {d['hora']}" + (f" con {d['musica']} en Spotify." if d.get("musica") else ".")
+    except (ValueError, KeyError):
+        return r
+
+
+@mcp.tool(name="alexa_alarmas")
+def alexa_alarmas() -> str:
+    """Alarmas activas de los Echo (JSON: id, dispositivo, fecha, hora, música), la más próxima primero."""
+    return _alexa("/alarmas")
+
+
+@mcp.tool(name="alexa_borrar_alarma")
+def alexa_borrar_alarma(id: str) -> str:
+    """Borra una alarma del Echo por su id (de alexa_alarmas)."""
+    r = _alexa("/alarma-borrar", id=id)
+    return "Alarma borrada." if '"borrada"' in r else r
+
+
+@mcp.tool(name="alexa_volumen")
+def alexa_volumen(cambio: int, dispositivo: str = "") -> str:
+    """Sube (cambio positivo) o baja (negativo) el volumen del Echo que está sonando. Devuelve el nivel nuevo."""
+    import json
+    r = _alexa("/volumen", cambio=cambio, dispositivo=dispositivo)
+    try:
+        return f"Volumen {json.loads(r)['volumen']}."
+    except (ValueError, KeyError):
+        return r
+
+
+@mcp.tool(name="alexa_saltar")
+def alexa_saltar(segundo: int, dispositivo: str = "") -> str:
+    """Mueve la canción que suena a ese segundo (adelantar o regresar)."""
+    r = _alexa("/saltar", posicion=max(0, segundo) * 1000, dispositivo=dispositivo)
+    return f"Listo, en el segundo {segundo}." if '"metodo"' in r else r
+
+
+@mcp.tool(name="spotify_lista")
+def spotify_lista(lista: str) -> str:
+    """Canciones de una lista, álbum o artista de Spotify ("spotify:playlist:ID", "spotify:album:ID"…), en JSON.
+    Lee la página pública de Spotify para insertar; no necesita cuenta."""
+    import json, re, urllib.request
+    m = re.fullmatch(r"spotify:(playlist|album|artist|show):([A-Za-z0-9]{10,40})", lista.strip())
+    if not m:
+        return json.dumps({"error": "lista no válida"})
+    req = urllib.request.Request(f"https://open.spotify.com/embed/{m.group(1)}/{m.group(2)}", headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        html = r.read(3_000_000).decode("utf-8", "ignore")
+    datos = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+    if not datos:
+        return json.dumps({"error": "Spotify no devolvió la lista"})
+    entidad = json.loads(datos.group(1)).get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+    canciones = [{"titulo": t.get("title", ""), "artista": (t.get("subtitle") or "").replace("\u00a0", " "),
+                  "duracion": t.get("duration", 0), "uri": t.get("uri", "")} for t in entidad.get("trackList", [])[:60]]
+    return json.dumps({"nombre": entidad.get("name") or entidad.get("title") or "", "canciones": canciones}, ensure_ascii=False)
+
+
 @mcp.tool(name="alexa_dispositivos")
 def alexa_dispositivos() -> str:
     """Lista los Echos de la cuenta de Amazon y si están en línea."""
@@ -657,6 +744,25 @@ async def voz(request):
     return Response(bytes(audio), media_type="audio/mpeg")
 
 
+PORTADAS_PERMITIDAS = ("i.scdn.co", "mosaic.scdn.co", "m.media-amazon.com", "images-na.ssl-images-amazon.com")
+
+
+async def portada(request):
+    """Descarga la portada de la canción para la consola: el DNS del router no resuelve i.scdn.co y la Mac sí.
+    POST /portada {"url": "https://i.scdn.co/..."} → imagen. Solo hosts de portadas, para no servir de proxy abierto."""
+    import urllib.request
+    from urllib.parse import urlparse
+    from starlette.responses import Response
+    url = str((await request.json()).get("url", ""))
+    u = urlparse(url)
+    if u.scheme != "https" or u.hostname not in PORTADAS_PERMITIDAS:
+        return JSONResponse({"error": "host no permitido"}, status_code=400)
+    with urllib.request.urlopen(url, timeout=10) as r:
+        datos = r.read(2_000_000)
+        tipo = r.headers.get("Content-Type", "image/jpeg")
+    return Response(datos, media_type=tipo)
+
+
 def app_con_clave():
     from starlette.requests import Request
     app = mcp.streamable_http_app()
@@ -667,9 +773,10 @@ def app_con_clave():
             if headers.get(b"authorization", b"").decode() != f"Bearer {TOKEN}":
                 await JSONResponse({"error": "clave incorrecta"}, status_code=401)(scope, receive, send)
                 return
-            if scope.get("path") == "/voz" and scope.get("method") == "POST":
+            rutas = {"/voz": voz, "/portada": portada}
+            if scope.get("path") in rutas and scope.get("method") == "POST":
                 try:
-                    resp = await voz(Request(scope, receive))
+                    resp = await rutas[scope["path"]](Request(scope, receive))
                 except Exception as e:
                     resp = JSONResponse({"error": str(e)[:200]}, status_code=502)
                 await resp(scope, receive, send)

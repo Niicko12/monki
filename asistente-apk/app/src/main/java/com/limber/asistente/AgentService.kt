@@ -59,6 +59,7 @@ class AgentService : AccessibilityService(), Controls {
     private lateinit var logScroll: ScrollView
     private lateinit var input: EditText
     private lateinit var micButton: Button
+    private lateinit var backButton: Button   // solo al escribir: cierra el teclado y vuelve a la cara
     private lateinit var faceView: EyesView
     private lateinit var stateView: TextView
     private lateinit var caption: TextView
@@ -85,17 +86,38 @@ class AgentService : AccessibilityService(), Controls {
     private lateinit var musicBar: LinearLayout
     private lateinit var musicArt: android.widget.ImageView
     private lateinit var musicText: TextView
-    private lateinit var musicPlay: Button
+    private lateinit var musicPlay: TextView
+    private lateinit var musicProgress: android.widget.SeekBar
+    private var musicSeeking = false     // mientras lo arrastras, el avance automático no mueve la barra
+    private var musicSeekJob: Job? = null
+    private lateinit var musicTime: TextView
+    // Lo último que se supo de la canción: el avance se calcula cada segundo sin preguntar a Amazon
+    private var musicBitmap: android.graphics.Bitmap? = null
+    private var musicTint = Color.parseColor("#18201D")
+    private var musicPos = 0L
+    private var musicLen = 0L
+    private var musicPosAt = 0L
+    private var musicPlaying = false
+    private var musicTicker: Job? = null
     private var musicAt = 0L
     /** Ánimo de la canción que suena (lo decide un modelo por título y artista); null si no hay música. */
     private var musicMood: Animo? = null
     private var musicKey = ""
     private var musicArtUrl = ""
     private lateinit var leftCol: LinearLayout
+    private lateinit var detailView: TextView     // detalle de un widget tocado, en el lugar de la cara
+    private lateinit var queueScroll: ScrollView  // lista de canciones de lo que suena, también en el lugar de la cara
+    private lateinit var queueList: LinearLayout
+    private var musicList = ""                    // "spotify:playlist:…" de la canción actual
+    private var musicTrack = ""
+    private var detailJob: Job? = null
     private lateinit var rightCol: LinearLayout
     private var weatherText = "…"
     private var weatherAt = 0L
-    private val pcText = mutableMapOf<String, String>()
+    /** Tarjeta de cada computadora conectada: título (modelo) y detalle (batería, disco, CPU, RAM). */
+    private val pcCards = mutableMapOf<String, Pair<String, String>>()
+    /** Alarmas del Echo (JSON de alexa_alarmas), para el widget. */
+    private var echoAlarms = org.json.JSONArray()
     private var pcAt = 0L
     private lateinit var inputRow: LinearLayout
     private var typing = false
@@ -235,6 +257,22 @@ class AgentService : AccessibilityService(), Controls {
 
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
+    private fun statusBarHeight(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else 0
+    }
+
+    /** Con música sonando, los botones de volumen de la consola suben o bajan el Echo (de 5 en 5). */
+    private fun echoVolume(cambio: Int) {
+        val c = musicClient() ?: return
+        scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching { c.call("alexa_volumen", org.json.JSONObject().put("cambio", cambio)).text }.getOrNull()
+            }
+            if (r != null && ::caption.isInitialized) caption.text = "🔊 ${r.removeSuffix(".")}"
+        }
+    }
+
     private fun overlayParams(w: Int, h: Int, focusable: Boolean) = WindowManager.LayoutParams(
         w, h, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
         (if (focusable) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) or
@@ -281,9 +319,16 @@ class AgentService : AccessibilityService(), Controls {
 
     private fun buildPanel(): LinearLayout {
         val pad = dp(10)
-        fun btn(label: String, onClick: () -> Unit) = Button(this).apply {
+        // Botones en forma de píldora: oscuros, o del color del ánimo si son la acción principal.
+        // Enfocados con la cruceta se marcan con borde blanco.
+        fun btn(label: String, main: Boolean = false, onClick: () -> Unit) = Button(this).apply {
             text = label; isAllCaps = false; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            minWidth = 0; minimumWidth = 0; setPadding(dp(10), 0, dp(10), 0)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(if (main) Color.parseColor("#0E1311") else Color.parseColor("#E4E9E6"))
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            stateListAnimator = null
+            background = buttonBackground(if (main) moodColor() else BTN_DARK)
+            setPadding(dp(if (main) 17 else 13), dp(5), dp(if (main) 17 else 13), dp(5))   // después del fondo: el fondo reemplaza el padding
             isFocusable = true; setOnClickListener { onClick() }
         }
         val bg = Color.parseColor("#0E1311")
@@ -298,19 +343,61 @@ class AgentService : AccessibilityService(), Controls {
             setLineSpacing(0f, 1.15f)
         }
         logScroll = ScrollView(this).apply { addView(log); isFocusable = false; visibility = View.GONE }
-        // Reproductor: lo que suena en Alexa (Spotify) con sus botones; solo aparece si hay música
-        musicArt = android.widget.ImageView(this).apply { scaleType = android.widget.ImageView.ScaleType.CENTER_CROP }
-        musicText = TextView(this).apply { maxLines = 2; setPadding(dp(10), 0, dp(6), 0); setTextColor(Color.WHITE) }
-        musicPlay = btn("⏯") { musicControl(if (musicPlay.tag == "sonando") "pausa" else "play") }
+        // Reproductor: lo que suena en Alexa (Spotify): portada, canción, avance y botones; solo aparece si hay música
+        musicArt = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(Color.parseColor("#2A332F")) }
+            clipToOutline = true
+            musicBitmap?.let { setImageBitmap(it) }   // al volver a abrir el panel, la portada que ya teníamos
+        }
+        musicText = TextView(this).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.WHITE) }
+        // Barra de la canción: se arrastra con el dedo, o con la cruceta (izquierda/derecha) estando enfocada
+        musicProgress = android.widget.SeekBar(this).apply {
+            max = 1000; keyProgressIncrement = 20; isFocusable = true
+            setPadding(dp(8), 0, dp(8), 0)
+            progressTintList = android.content.res.ColorStateList.valueOf(moodColor())
+            thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3A4440"))
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(b: android.widget.SeekBar, p: Int, fromUser: Boolean) {
+                    if (!fromUser || musicLen <= 0) return
+                    musicSeeking = true
+                    showMusicTime(p * musicLen / 1000)
+                    // Con la cruceta no hay "soltar": salta cuando dejas de mover un momento
+                    musicSeekJob?.cancel()
+                    musicSeekJob = scope.launch { kotlinx.coroutines.delay(800); seekMusic(p * musicLen / 1000) }
+                }
+                override fun onStartTrackingTouch(b: android.widget.SeekBar) { musicSeeking = true; musicSeekJob?.cancel() }
+                override fun onStopTrackingTouch(b: android.widget.SeekBar) {
+                    musicSeekJob?.cancel(); seekMusic(b.progress * musicLen / 1000)
+                }
+            })
+        }
+        musicTime = TextView(this).apply { setTextColor(Color.parseColor("#B5C0BB")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f) }
+        fun roundBtn(label: String, main: Boolean = false, onClick: () -> Unit) = TextView(this).apply {
+            text = label; gravity = Gravity.CENTER; setTextColor(if (main) Color.parseColor("#0E1311") else Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (main) 18f else 15f)
+            background = buttonBackground(if (main) moodColor() else BTN_DARK, oval = true, inset = 0)
+            isFocusable = true; isClickable = true; setOnClickListener { onClick() }
+        }
+        musicPlay = roundBtn("▶", main = true) { musicControl(if (musicPlaying) "pausa" else "play") }
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(10), 0, dp(8), 0)
+            addView(musicText)
+            addView(musicProgress, LinearLayout.LayoutParams(-1, dp(18)).apply { setMargins(-dp(8), 0, -dp(8), 0) })
+            addView(musicTime)
+        }
+        musicArt.setOnClickListener { showQueue() }
+        info.setOnClickListener { showQueue() }
         musicBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-            background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.parseColor("#18201D")) }
-            addView(musicArt, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(musicText, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(btn("⏮") { musicControl("anterior") })
-            addView(musicPlay)
-            addView(btn("⏭") { musicControl("siguiente") })
+            setPadding(dp(5), dp(4), dp(8), dp(4))
+            background = musicBackground()
+            addView(musicArt, LinearLayout.LayoutParams(dp(52), dp(52)))
+            addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(roundBtn("⏮") { musicControl("anterior") }, LinearLayout.LayoutParams(dp(34), dp(34)))
+            addView(musicPlay, LinearLayout.LayoutParams(dp(42), dp(42)).apply { setMargins(dp(6), 0, dp(6), 0) })
+            addView(roundBtn("⏭") { musicControl("siguiente") }, LinearLayout.LayoutParams(dp(34), dp(34)))
         }
         // Widgets en columnas a los lados de la cara: grandes y sin taparla
         leftCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -318,7 +405,19 @@ class AgentService : AccessibilityService(), Controls {
         faceRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(leftCol, LinearLayout.LayoutParams(dp(WIDGET_W), -1))
-            addView(faceView, LinearLayout.LayoutParams(0, -1, 1f))
+            detailView = TextView(this@AgentService).apply {
+                visibility = View.GONE; setTextColor(Color.parseColor("#E4E9E6")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setLineSpacing(0f, 1.15f); gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                setOnClickListener { hideDetail() }
+            }
+            queueList = LinearLayout(this@AgentService).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)) }
+            queueScroll = ScrollView(this@AgentService).apply { visibility = View.GONE; addView(queueList) }
+            addView(android.widget.FrameLayout(this@AgentService).apply {
+                addView(faceView, android.widget.FrameLayout.LayoutParams(-1, -1))
+                addView(detailView, android.widget.FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+                addView(queueScroll, android.widget.FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+            }, LinearLayout.LayoutParams(0, -1, 1f))
             addView(rightCol, LinearLayout.LayoutParams(dp(WIDGET_W), -1))
         }
         val header = LinearLayout(this).apply {
@@ -328,7 +427,7 @@ class AgentService : AccessibilityService(), Controls {
                 setTextColor(Color.parseColor("#9AA6A1")); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setPadding(0, 0, dp(10), 0)
             }
             addView(clockView)
-            addView(btn("Historial") {
+            addView(btn("🕘 Historial") {
                 val show = logScroll.visibility != View.VISIBLE
                 logScroll.visibility = if (show) View.VISIBLE else View.GONE
                 faceView.visibility = if (show) View.GONE else View.VISIBLE
@@ -336,22 +435,29 @@ class AgentService : AccessibilityService(), Controls {
                 faceRow.visibility = faceView.visibility
                 if (show) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             })
-            addView(btn("Nuevo") { agent.reset(); log.text = ""; say("Conversación nueva. ¿En qué te ayudo?", speak = false) })
-            addView(btn("Cerrar") { hidePanel() })
+            addView(btn("✚ Nuevo") { agent.reset(); log.text = ""; say("Conversación nueva. ¿En qué te ayudo?", speak = false) })
+            addView(btn("✕") { hidePanel() })
         }
         input = EditText(this).apply {
-            hint = "Escribe tu pedido…"; setHintTextColor(Color.GRAY); setTextColor(Color.WHITE)
+            hint = "Escribe tu pedido…"; setHintTextColor(Color.parseColor("#7D8A84")); setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = android.graphics.drawable.InsetDrawable(android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat(); setColor(Color.parseColor("#18201D")); setStroke(dp(1), Color.parseColor("#34403B"))
+            }, dp(2))
+            setPadding(dp(14), dp(5), dp(14), dp(5))
             setSingleLine(true); imeOptions = EditorInfo.IME_ACTION_SEND
             setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { send(); true } else false }
             setOnFocusChangeListener { _, has -> setTypingMode(has) }
             setOnClickListener { setTypingMode(true) }
         }
-        micButton = btn("🎙 Hablar (X)") { toggleMic() }
+        micButton = btn("🎙 Hablar (X)", main = true) { toggleMic() }
+        backButton = btn("← Volver") { leaveTyping() }.apply { visibility = View.GONE }
         inputRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            addView(backButton)
             addView(input, LinearLayout.LayoutParams(0, -2, 1f))
             addView(micButton)
-            addView(btn("Enviar") { send() })
+            addView(btn("➤") { send() })
         }
         val row = inputRow
         // Pantalla completa como xiaozhi: ojos grandes al centro, la respuesta abajo.
@@ -363,7 +469,12 @@ class AgentService : AccessibilityService(), Controls {
                 if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) when (e.keyCode) {
                     KeyEvent.KEYCODE_BUTTON_X -> { toggleMic(); return true }
                     KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
+                        if (::detailView.isInitialized && (detailView.visibility == View.VISIBLE || queueScroll.visibility == View.VISIBLE)) { hideDetail(); return true }
                         if (job?.isActive == true || state == State.SPEAKING || recorder.isRecording) interrupt() else hidePanel()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> if (::musicBar.isInitialized && musicBar.visibility == View.VISIBLE) {
+                        echoVolume(if (e.keyCode == KeyEvent.KEYCODE_VOLUME_UP) 5 else -5)
                         return true
                     }
                     KeyEvent.KEYCODE_BUTTON_A -> {
@@ -372,6 +483,9 @@ class AgentService : AccessibilityService(), Controls {
                     }
                 }
                 if (e.keyCode in listOf(KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BACK)) return true
+                // Con música, el volumen de la consola no se toca (ni al soltar ni al mantener)
+                if ((e.keyCode == KeyEvent.KEYCODE_VOLUME_UP || e.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) &&
+                    ::musicBar.isInitialized && musicBar.visibility == View.VISIBLE) return true
                 return super.dispatchKeyEvent(e)
             }
         }.apply {
@@ -388,6 +502,14 @@ class AgentService : AccessibilityService(), Controls {
     }
 
     /** Al escribir, el panel se encoge a la mitad de arriba (el teclado usa la de abajo) y muestra la conversación. */
+    /** Sale del modo escribir: cierra el teclado y regresa a la cara. */
+    private fun leaveTyping() {
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(input.windowToken, 0)
+        input.clearFocus()
+        setTypingMode(false)
+        micButton.requestFocus()
+    }
+
     private fun setTypingMode(on: Boolean) {
         val root = panel ?: return
         if (on == typing) return
@@ -395,13 +517,18 @@ class AgentService : AccessibilityService(), Controls {
         wakeUp()
         val (_, h) = screenSize
         val lp = root.layoutParams as WindowManager.LayoutParams
-        lp.height = if (on) (h * 0.5).toInt() else h
+        lp.height = if (on) (h * 0.5).toInt() else h - statusBarHeight()
         lp.gravity = Gravity.TOP or Gravity.START
         runCatching { wm.updateViewLayout(root, lp) }
         faceView.visibility = if (on) View.GONE else View.VISIBLE
         caption.visibility = faceView.visibility
         faceRow.visibility = faceView.visibility
         logScroll.visibility = if (on) View.VISIBLE else View.GONE
+        // Al escribir: botón para volver, y sin "Hablar" para dejar espacio al texto
+        backButton.visibility = if (on) View.VISIBLE else View.GONE
+        micButton.visibility = if (on) View.GONE else View.VISIBLE
+        if (::musicBar.isInitialized && on) musicBar.visibility = View.GONE
+        if (!on) refreshMusic()
         if (on) {
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             input.post { showKeyboardFor(input) }
@@ -413,7 +540,8 @@ class AgentService : AccessibilityService(), Controls {
     fun showPanel() {
         if (panel == null) {
             val (w, h) = screenSize
-            val lp = overlayParams(w, h, true).apply {
+            // La ventana empieza debajo de la barra de estado: con la altura completa, la fila de abajo quedaba fuera
+            val lp = overlayParams(w, h - statusBarHeight(), true).apply {
                 gravity = Gravity.TOP or Gravity.START
                 softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             }
@@ -485,10 +613,11 @@ class AgentService : AccessibilityService(), Controls {
         speakJob?.cancel()
         speakJob = scope.launch {
             setState(State.SPEAKING)
-            // 1) Voz de Edge desde la computadora ("casa"): natural y rápida (~1 s)
-            val edge = withContext(Dispatchers.IO) {
+            // 1) Voz de Edge desde la computadora ("casa"): natural y rápida (~1 s).
+            //    Con la Mac apagada no se vuelve a intentar en 2 min, para no esperar su tiempo de conexión en cada respuesta.
+            val edge = if (System.currentTimeMillis() - edgeFailedAt < EDGE_RETRY_MS) null else withContext(Dispatchers.IO) {
                 remoteClients.firstNotNullOfOrNull { c -> runCatching { c.voice(text) }.getOrNull() }
-            }
+            }.also { if (it == null && remoteClients.isNotEmpty()) edgeFailedAt = System.currentTimeMillis() }
             if (edge != null) {
                 lap("voz de Edge")
                 playVoice(File(cacheDir, "voz.mp3").apply { writeBytes(edge) }, offline = false)
@@ -618,6 +747,7 @@ class AgentService : AccessibilityService(), Controls {
     }
     private val offlineVoice by lazy { OfflineVoice(this) }
     private var geminiVoiceFailedAt = 0L
+    private var edgeFailedAt = 0L
 
     /** Después de cada respuesta: en modo Alexa sigue escuchando unos segundos, luego vuelve a la palabra de activación. */
     private fun afterTurn() {
@@ -682,6 +812,7 @@ class AgentService : AccessibilityService(), Controls {
     /** Vuelve a pintar la cara (color y ánimo) sin contar como actividad. */
     fun refreshFace() {
         drawWidgets()
+        tintMainButtons()
         if (asleep) { faceColor().let { c -> if (::faceView.isInitialized) faceView.eyeColor = c; bubble?.eyeColor = c }; return }
         applyFace()
     }
@@ -993,11 +1124,16 @@ class AgentService : AccessibilityService(), Controls {
             pcAt = now
             scope.launch {
                 val clients = remoteClients.filter { c -> c.tools.any { it.optString("name") == "pc_info" } }
-                pcText.keys.retainAll(clients.map { it.alias }.toSet())
+                pcCards.keys.retainAll(clients.map { it.alias }.toSet())
                 for (c in clients) {
-                    pcText[c.alias] = withContext(Dispatchers.IO) {
-                        runCatching { c.call("pc_info", org.json.JSONObject().put("corto", true)).text }.getOrDefault("sin conexión")
+                    val raw = withContext(Dispatchers.IO) {
+                        runCatching { c.call("pc_info", org.json.JSONObject().put("formato", "json")).text }.getOrNull()
                     }
+                    pcCards[c.alias] = pcCard(c.alias, raw)
+                }
+                musicClient()?.let { c ->
+                    withContext(Dispatchers.IO) { runCatching { org.json.JSONArray(c.call("alexa_alarmas", org.json.JSONObject()).text) }.getOrNull() }
+                        ?.let { echoAlarms = it }
                 }
                 drawWidgets()
             }
@@ -1022,26 +1158,105 @@ class AgentService : AccessibilityService(), Controls {
                 return@launch
             }
             updateMusicMood(info)
-            musicBar.visibility = View.VISIBLE
-            musicPlay.tag = estado
-            musicPlay.text = if (estado == "sonando") "⏸" else "▶"
+            if (!typing) musicBar.visibility = View.VISIBLE   // al escribir no tapa la conversación
+            musicPlaying = estado == "sonando"
+            musicPlay.text = if (musicPlaying) "⏸" else "▶"
+            musicPos = info.optLong("progreso"); musicLen = info.optLong("duracion"); musicPosAt = System.currentTimeMillis()
+            musicList = info.optString("lista"); musicTrack = info.optString("cancion")
             val title = info.optString("titulo"); val sub = listOf(info.optString("artista"), info.optString("dispositivo")).filter { it.isNotBlank() }.joinToString(" · ")
             val t = android.text.SpannableString("$title\n$sub")
-            t.setSpan(android.text.style.ForegroundColorSpan(faceColor()), 0, title.length, 0)
             t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
-            t.setSpan(android.text.style.AbsoluteSizeSpan(15, true), 0, title.length, 0)
-            t.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#B5C0BB")), title.length + 1, t.length, 0)
+            t.setSpan(android.text.style.AbsoluteSizeSpan(16, true), 0, title.length, 0)
+            t.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#C9D2CE")), title.length + 1, t.length, 0)
             t.setSpan(android.text.style.AbsoluteSizeSpan(12, true), title.length + 1, t.length, 0)
             musicText.text = t
+            drawMusicProgress()
+            if (musicTicker?.isActive != true) musicTicker = scope.launch {
+                while (::musicBar.isInitialized && musicBar.visibility == View.VISIBLE) { drawMusicProgress(); kotlinx.coroutines.delay(1000) }
+            }
+            // La portada se baja solo si cambió o si este panel aún no la tiene; si falla, se reintenta en la siguiente vuelta
             val url = info.optString("portada")
-            if (url.isNotBlank() && url != musicArtUrl) {
-                musicArtUrl = url
+            if (url.isNotBlank() && (url != musicArtUrl || musicArt.drawable == null)) {
                 withContext(Dispatchers.IO) {
-                    runCatching { java.net.URL(url).openStream().use { android.graphics.BitmapFactory.decodeStream(it) } }.getOrNull()
-                }?.let { musicArt.setImageBitmap(it) }
+                    // Primero por el hub (el router no resuelve el servidor de imágenes de Spotify); si no, directo
+                    val bytes = runCatching { c.albumArt(url) }.getOrNull()
+                        ?: runCatching { java.net.URL(url).openStream().use { it.readBytes() } }
+                            .onFailure { android.util.Log.w("Asistente", "Portada: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+                    bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+                }?.let { bmp ->
+                    musicArtUrl = url; musicBitmap = bmp; musicTint = averageColor(bmp)
+                    musicArt.setImageBitmap(bmp)
+                    musicBar.background = musicBackground()
+                }
             }
         }
     }
+
+    /** Fondo de botón: píldora (u óvalo) del color dado; enfocada con la cruceta, borde blanco. */
+    private fun buttonBackground(fill: Int, oval: Boolean = false, inset: Int = 2) = android.graphics.drawable.StateListDrawable().apply {
+        fun shape(focused: Boolean) = android.graphics.drawable.InsetDrawable(android.graphics.drawable.GradientDrawable().apply {
+            if (oval) shape = android.graphics.drawable.GradientDrawable.OVAL else cornerRadius = dp(18).toFloat()
+            setColor(if (focused && fill == BTN_DARK) Color.parseColor("#34403B") else fill)
+            setStroke(dp(if (focused) 2 else 1), if (focused) Color.WHITE else Color.parseColor("#34403B"))
+        }, dp(inset))
+        addState(intArrayOf(android.R.attr.state_focused), shape(true))
+        addState(intArrayOf(android.R.attr.state_pressed), shape(true))
+        addState(intArrayOf(), shape(false))
+    }
+
+    /** Los botones principales (Hablar, pausa) toman el color del ánimo. */
+    private fun tintMainButtons() {
+        val c = moodColor()
+        if (::micButton.isInitialized) micButton.background = buttonBackground(c).also { micButton.setPadding(dp(17), dp(5), dp(17), dp(5)) }
+        if (::musicPlay.isInitialized) musicPlay.background = buttonBackground(c, oval = true, inset = 0)
+    }
+
+    /** Fondo del reproductor: degradado del color de la portada (oscurecido) al color de las tarjetas. */
+    private fun musicBackground() = android.graphics.drawable.GradientDrawable(
+        android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+        intArrayOf(blend(musicTint, Color.parseColor("#0E1311"), 0.55f), Color.parseColor("#18201D"))
+    ).apply { cornerRadius = dp(14).toFloat() }
+
+    private fun averageColor(bmp: android.graphics.Bitmap): Int {
+        val s = android.graphics.Bitmap.createScaledBitmap(bmp, 8, 8, true)
+        var r = 0; var g = 0; var b = 0
+        for (x in 0 until 8) for (y in 0 until 8) { val p = s.getPixel(x, y); r += Color.red(p); g += Color.green(p); b += Color.blue(p) }
+        return Color.rgb(r / 64, g / 64, b / 64)
+    }
+
+    private fun blend(a: Int, b: Int, t: Float) = Color.rgb(
+        (Color.red(a) * (1 - t) + Color.red(b) * t).toInt(),
+        (Color.green(a) * (1 - t) + Color.green(b) * t).toInt(),
+        (Color.blue(a) * (1 - t) + Color.blue(b) * t).toInt())
+
+    /** Barra y tiempo de la canción, avanzando solos mientras suena. */
+    private fun drawMusicProgress() {
+        if (!::musicProgress.isInitialized || musicLen <= 0 || musicSeeking) return
+        val pos = (musicPos + if (musicPlaying) System.currentTimeMillis() - musicPosAt else 0L).coerceAtMost(musicLen)
+        musicProgress.progress = (pos * 1000 / musicLen).toInt()
+        musicProgress.progressTintList = android.content.res.ColorStateList.valueOf(moodColor())
+        showMusicTime(pos)
+    }
+
+    private fun showMusicTime(pos: Long) {
+        fun mmss(ms: Long) = "%d:%02d".format(ms / 60_000, ms / 1000 % 60)
+        musicTime.text = "${mmss(pos)} / ${mmss(musicLen)}"
+    }
+
+    /** Mueve la canción del Echo a esa posición (alexa_saltar del hub). */
+    private fun seekMusic(posMs: Long) {
+        val c = musicClient()
+        musicPos = posMs; musicPosAt = System.currentTimeMillis()
+        if (c == null) { musicSeeking = false; return }
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { c.call("alexa_saltar", org.json.JSONObject().put("segundo", posMs / 1000)) } }
+            musicSeeking = false
+            kotlinx.coroutines.delay(1500); refreshMusic()
+        }
+    }
+
+    /** Color del ánimo actual (el de la canción si suena música): lo usan los widgets y el reproductor. */
+    private fun moodColor() = Color.parseColor((musicMood ?: currentMood()).color)
 
     /** Al cambiar de canción, pregunta (a Groq, rápido y gratis) qué ánimo tiene; en pausa la cara vuelve a lo suyo. */
     private fun updateMusicMood(info: org.json.JSONObject) {
@@ -1079,17 +1294,155 @@ class AgentService : AccessibilityService(), Controls {
         }
     }
 
+    /** Al tocar un widget: su detalle en el lugar de la cara (se cierra solo, tocándolo o con B). */
+    private fun onWidgetTap(left: Boolean, index: Int) {
+        val loc = java.util.Locale("es")
+        scope.launch {
+            when {
+                left && index == 0 -> showDetail("🕐 " + java.text.SimpleDateFormat("EEEE d 'de' MMMM 'de' yyyy, HH:mm", loc).format(java.util.Date()),
+                    deviceStatus().replace(". ", ".\n"))
+                left && index == 1 -> {
+                    showDetail("☁ Clima", "Consultando…")
+                    val w = withContext(Dispatchers.IO) { runCatching { Web.weather("", prefs.location) }.getOrElse { "No pude ver el clima: ${it.message}" } }
+                    showDetail("☁ Clima en ${prefs.location.substringBefore(",").ifBlank { "tu zona" }}", w)
+                }
+                !left && index == 0 -> {
+                    val echo = (0 until echoAlarms.length()).map { echoAlarms.getJSONObject(it) }.joinToString("\n") { a ->
+                        "• ${fechaCorta(a.optString("fecha"))} ${a.optString("hora")} · ${a.optString("dispositivo")}" +
+                            (a.optString("musica").takeIf { it.isNotBlank() }?.let { " · 🎵 $it" } ?: "")
+                    }.ifEmpty { "Sin alarmas en el Echo." }
+                    showDetail("⏰ Alarmas", "$echo\n\nEn la consola:\n${alarms.list()}")
+                }
+                else -> {
+                    val alias = pcCards.keys.toList().getOrNull(index - 1) ?: return@launch
+                    val c = remoteClients.firstOrNull { it.alias == alias } ?: return@launch
+                    showDetail(pcCards[alias]?.first ?: alias, "Consultando…")
+                    val info = withContext(Dispatchers.IO) { runCatching { c.call("pc_info", org.json.JSONObject()).text }.getOrElse { "Sin conexión." } }
+                    showDetail(pcCards[alias]?.first ?: alias, info.replace(", ", "\n"))
+                }
+            }
+        }
+    }
+
+    /** "2026-10-20" → "mar 20 oct" (o "hoy" / "mañana"). */
+    private fun fechaCorta(iso: String): String {
+        val d = runCatching { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(iso) }.getOrNull() ?: return iso
+        val hoy = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val manana = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(System.currentTimeMillis() + 86_400_000))
+        return when (iso) { hoy -> "hoy"; manana -> "mañana"; else -> java.text.SimpleDateFormat("EEE d MMM", java.util.Locale("es")).format(d) }
+    }
+
+    private fun showDetail(title: String, body: String) {
+        if (!::detailView.isInitialized) return
+        val accent = moodColor()
+        val t = android.text.SpannableString("$title\n\n$body")
+        t.setSpan(android.text.style.ForegroundColorSpan(accent), 0, title.length, 0)
+        t.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
+        t.setSpan(android.text.style.AbsoluteSizeSpan(17, true), 0, title.length, 0)
+        detailView.text = t
+        detailView.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat(); setColor(blend(accent, Color.parseColor("#18201D"), 0.88f)); setStroke(dp(1), blend(accent, Color.parseColor("#18201D"), 0.5f))
+        }
+        detailView.visibility = View.VISIBLE
+        queueScroll.visibility = View.GONE
+        faceView.visibility = View.INVISIBLE
+        detailJob?.cancel()
+        detailJob = scope.launch { kotlinx.coroutines.delay(20_000); hideDetail() }
+    }
+
+    /** Lista de canciones de lo que suena (spotify_lista del hub). Tocar una se la pide al Echo. */
+    private fun showQueue() {
+        val c = musicClient() ?: return
+        if (musicList.isBlank()) { showDetail("🎵 Lista", "Esta música no viene de una lista de Spotify."); return }
+        val accent = moodColor()
+        queueList.removeAllViews()
+        queueList.addView(TextView(this).apply { text = "🎵 Cargando lista…"; setTextColor(accent); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f) })
+        queueScroll.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat(); setColor(blend(accent, Color.parseColor("#18201D"), 0.88f)); setStroke(dp(1), blend(accent, Color.parseColor("#18201D"), 0.5f))
+        }
+        detailView.visibility = View.GONE
+        queueScroll.visibility = View.VISIBLE
+        faceView.visibility = View.INVISIBLE
+        restartDetailTimer(30_000)
+        scope.launch {
+            val j = withContext(Dispatchers.IO) {
+                runCatching { org.json.JSONObject(c.call("spotify_lista", org.json.JSONObject().put("lista", musicList)).text) }.getOrNull()
+            }
+            val songs = j?.optJSONArray("canciones")
+            queueList.removeAllViews()
+            queueList.addView(TextView(this@AgentService).apply {
+                text = "🎵 " + (j?.optString("nombre")?.ifBlank { null } ?: "Lista"); setTextColor(accent)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); setPadding(dp(4), 0, 0, dp(6))
+            })
+            if (songs == null || songs.length() == 0) {
+                queueList.addView(TextView(this@AgentService).apply { text = "No pude leer la lista."; setTextColor(Color.WHITE) }); return@launch
+            }
+            var current: View? = null
+            for (i in 0 until songs.length()) {
+                val s = songs.getJSONObject(i)
+                val playing = s.optString("uri") == musicTrack
+                val dur = s.optLong("duracion")
+                val row = TextView(this@AgentService).apply {
+                    val t = s.optString("titulo"); val a = s.optString("artista")
+                    val line = android.text.SpannableString("${if (playing) "▶ " else "${i + 1}. "}$t\n$a · ${dur / 60_000}:${"%02d".format(dur / 1000 % 60)}")
+                    line.setSpan(android.text.style.ForegroundColorSpan(if (playing) accent else Color.WHITE), 0, line.indexOf("\n"), 0)
+                    line.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, line.indexOf("\n"), 0)
+                    line.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#9AA6A1")), line.indexOf("\n") + 1, line.length, 0)
+                    line.setSpan(android.text.style.AbsoluteSizeSpan(11, true), line.indexOf("\n") + 1, line.length, 0)
+                    text = line; setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); setPadding(dp(8), dp(5), dp(8), dp(5))
+                    isFocusable = true; isClickable = true
+                    background = buttonBackground(if (playing) blend(accent, Color.parseColor("#18201D"), 0.7f) else Color.TRANSPARENT, inset = 1)
+                    setOnClickListener {
+                        restartDetailTimer(30_000)
+                        scope.launch {
+                            withContext(Dispatchers.IO) { runCatching { c.call("alexa_comando", org.json.JSONObject().put("texto", "pon $t de $a en Spotify")) } }
+                            caption.text = "🎵 $t"
+                            kotlinx.coroutines.delay(4000); refreshMusic()
+                        }
+                    }
+                }
+                queueList.addView(row)
+                if (playing) current = row
+            }
+            current?.let { v -> queueScroll.post { queueScroll.scrollTo(0, maxOf(0, v.top - dp(40))); v.requestFocus() } }
+        }
+    }
+
+    private fun restartDetailTimer(ms: Long) {
+        detailJob?.cancel()
+        detailJob = scope.launch { kotlinx.coroutines.delay(ms); hideDetail() }
+    }
+
+    private fun hideDetail() {
+        detailJob?.cancel()
+        if (!::detailView.isInitialized) return
+        queueScroll.visibility = View.GONE
+        detailView.visibility = View.GONE
+        if (faceRow.visibility == View.VISIBLE) faceView.visibility = View.VISIBLE
+    }
+
+    /** Del JSON de pc_info a la tarjeta: "💻 MacBook Air" y debajo batería, disco, CPU y RAM. */
+    private fun pcCard(alias: String, raw: String?): Pair<String, String> {
+        val j = raw?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: return "💻 $alias" to "sin conexión"
+        val icon = if (j.optString("sistema") == "Windows") "🖥" else "💻"
+        val bat = if (j.isNull("bateria")) "🔌" else "🔋${j.optInt("bateria")}%${if (j.optBoolean("cargando")) "⚡" else ""}"
+        return "$icon ${j.optString("modelo", alias)}" to
+            "$bat  💾${j.optInt("disco_libre_gb")} GB\nCPU ${j.optInt("cpu")}% · RAM ${j.optInt("ram")}%"
+    }
+
     private fun drawWidgets() {
         if (!::faceRow.isInitialized) return
         val loc = java.util.Locale("es")
-        val next = alarms.next()
+        val next = echoAlarms.optJSONObject(0)?.let { a ->
+            a.optString("hora") to (a.optString("musica").takeIf { it.isNotBlank() }?.let { "🎵 $it" } ?: fechaCorta(a.optString("fecha")))
+        } ?: alarms.next()
         val left = listOf(
             java.text.SimpleDateFormat("HH:mm", loc).format(java.util.Date()) to java.text.SimpleDateFormat("EEE d MMM", loc).format(java.util.Date()),
             (if (prefs.location.isBlank()) "☁ —" else weatherText) to prefs.location.ifBlank { "sin ubicación" }.substringBefore(","),
         )
         val right = mutableListOf((next?.let { "⏰ ${it.first}" } ?: "⏰ —") to (next?.second?.take(16) ?: "sin alarmas"))
-        pcText.forEach { (alias, t) -> right += "💻 $alias" to t.replace(" · ", "\n") }
-        val accent = faceColor()
+        right += pcCards.values
+        val accent = moodColor()
         fillColumn(leftCol, left, accent)
         fillColumn(rightCol, right, accent)
     }
@@ -1101,14 +1454,25 @@ class AgentService : AccessibilityService(), Controls {
             repeat(cards.size) {
                 col.addView(TextView(this).apply {
                     gravity = Gravity.CENTER; setPadding(dp(6), dp(4), dp(6), dp(4))
-                    background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.parseColor("#18201D")) }
+                    isFocusable = true; isClickable = true
+                    setOnClickListener { onWidgetTap(col === leftCol, col.indexOfChild(this)) }
+                    setOnFocusChangeListener { _, _ -> drawWidgets() }
+                    background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat() }
                 }, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
             }
+        }
+        // Tarjetas teñidas con el color del ánimo y con un borde de ese color
+        for (i in 0 until col.childCount) (col.getChildAt(i).background as? android.graphics.drawable.GradientDrawable)?.apply {
+            val focused = col.getChildAt(i).isFocused
+            setColor(blend(accent, Color.parseColor("#18201D"), 0.86f))
+            setStroke(dp(if (focused) 2 else 1), if (focused) Color.WHITE else blend(accent, Color.parseColor("#18201D"), 0.55f))
         }
         cards.forEachIndexed { i, (big, small) ->
             val text = android.text.SpannableString("$big\n$small")
             text.setSpan(android.text.style.ForegroundColorSpan(accent), 0, big.length, 0)
-            text.setSpan(android.text.style.AbsoluteSizeSpan(if (cards.size > 2) 18 else 24, true), 0, big.length, 0)
+            // Títulos largos (el modelo de la computadora) más chicos para que no partan la tarjeta
+            val bigSize = when { big.length > 10 -> 16; cards.size > 2 -> 18; else -> 24 }
+            text.setSpan(android.text.style.AbsoluteSizeSpan(bigSize, true), 0, big.length, 0)
             text.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, big.length, 0)
             text.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#B5C0BB")), big.length + 1, text.length, 0)
             text.setSpan(android.text.style.AbsoluteSizeSpan(13, true), big.length + 1, text.length, 0)
@@ -1169,6 +1533,8 @@ class AgentService : AccessibilityService(), Controls {
         private const val SLEEP_AFTER_MS = 5 * 60_000L
         private const val EMOTION_SHOWN_MS = 30_000L
         private const val WIDGET_W = 140
+        private const val EDGE_RETRY_MS = 2 * 60_000L
+        private val BTN_DARK = Color.parseColor("#232C28")
         /** Cuánto sigue prendido el servicio de toques tras el último toque (varios toques seguidos no lo reinician). */
         private const val GESTURE_OFF_MS = 8_000L
         private const val GEMINI_VOICE_RETRY_MS = 30 * 60_000L

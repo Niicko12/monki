@@ -91,16 +91,22 @@ function infoDe(d) {
       if (!s) return ok(null);
       const p = s.nowPlayingData;
       const art = p.mainArt || {};
+      // De qué lista o álbum viene la canción (para mostrar la lista en la consola)
+      let lista = '';
+      try { lista = JSON.parse((p.mediaReference && p.mediaReference.value) || '{}').contentId || ''; } catch (e) { lista = ''; }
       ok({
         dispositivo: d.nombre,
         estado: p.playerState === 'PLAYING' ? 'sonando' : p.playerState === 'PAUSED' ? 'pausa' : String(p.playerState || '').toLowerCase(),
         titulo: p.infoText.title || '',
         artista: p.infoText.subText1 || '',
         album: p.infoText.subText2 || '',
-        portada: art.mediumUrl || art.smallUrl || art.fullUrl || '',
+        // largeUrl = 300 px; mediumUrl de Spotify es de 64 px y se ve borrosa
+        portada: art.largeUrl || art.mediumUrl || art.fullUrl || art.smallUrl || '',
         app: (p.provider && p.provider.providerName) || '',
         progreso: (p.progress && p.progress.mediaProgress) || 0,
         duracion: (p.progress && p.progress.mediaLength) || 0,
+        lista: lista || p.queueId || '',
+        cancion: p.mediaId || '',
       });
     });
   });
@@ -131,6 +137,107 @@ async function controlar(accion, nombre, valor) {
   return secuencia(destino, 'textCommand', texto);
 }
 
+/** Salta a una posición (ms) de la canción que suena. Primero SeekCommand de la API de Amazon (mediaPosition va en
+ *  SEGUNDOS: en ms se pasa del final y salta a la siguiente canción); si la canción
+ *  no se movió (pasa con Spotify), una orden de texto relativa: "adelanta N segundos" / "regresa N segundos". */
+async function saltar(posicionMs, nombre) {
+  const actual = await reproduciendo(nombre);
+  if (!actual || !actual.duracion) throw new Error('No hay música sonando.');
+  const d = elegir(actual.dispositivo);
+  const tipo = alexa.serialNumbers[d.serie].deviceType;
+  const destino = Math.max(0, Math.min(actual.duracion - 1000, posicionMs | 0));
+  await new Promise((ok) => alexa.httpsGet(`/api/np/command?deviceSerialNumber=${d.serie}&deviceType=${tipo}`, () => ok(),
+    { method: 'POST', data: JSON.stringify({ type: 'SeekCommand', mediaPosition: Math.round(destino / 1000), contentFocusClientId: null }) }));
+  await new Promise((ok) => setTimeout(ok, 1500));
+  const despues = await reproduciendo(actual.dispositivo);
+  const esperado = destino + 1500;
+  if (despues && Math.abs(despues.progreso - esperado) < 4000) return { dispositivo: d.nombre, metodo: 'seek', progreso: despues.progreso };
+  // Si cambió de canción o la diferencia no tiene sentido, no se manda nada (una orden rara puede saltar de canción)
+  if (!despues || despues.titulo !== actual.titulo) return { dispositivo: d.nombre, metodo: 'nada', motivo: 'cambió la canción' };
+  const delta = Math.round((destino - despues.progreso) / 1000);
+  if (Math.abs(delta) < 2 || Math.abs(delta) > actual.duracion / 1000) {
+    return { dispositivo: d.nombre, metodo: 'nada', destino, antes: actual.progreso, despues: despues.progreso };
+  }
+  await secuencia(actual.dispositivo, 'textCommand', delta > 0 ? `adelanta ${delta} segundos` : `regresa ${-delta} segundos`);
+  return { dispositivo: d.nombre, metodo: 'texto', segundos: delta };
+}
+
+// Último volumen que pusimos en cada Echo: getMedia tarda en reflejar los cambios
+const volumenes = {};
+
+/** Sube o baja el volumen del Echo que está sonando (cambio en puntos, p. ej. +10 / -10). Devuelve el nivel nuevo. */
+async function cambiarVolumen(cambio, nombre) {
+  const actual = nombre ? null : await reproduciendo();
+  const d = elegir(actual ? actual.dispositivo : nombre);
+  if (!d) throw new Error('No encontré ningún Echo en la cuenta.');
+  const reciente = volumenes[d.serie] && Date.now() - volumenes[d.serie].at < 60000 ? volumenes[d.serie].vol : null;
+  const ahora = reciente !== null ? reciente
+    : await new Promise((ok) => alexa.getMedia(d.serie, (err, r) => ok(!err && r && typeof r.volume === 'number' ? r.volume : 30)));
+  const nuevo = Math.max(0, Math.min(100, ahora + (cambio | 0)));
+  volumenes[d.serie] = { vol: nuevo, at: Date.now() };
+  await secuencia(d.nombre, 'volume', nuevo);
+  return { dispositivo: d.nombre, volumen: nuevo };
+}
+
+/** Alarmas activas de los Echo (también las de música), ordenadas por la próxima en sonar. */
+function alarmas() {
+  return new Promise((ok, mal) => alexa.getNotifications(false, (err, r) => {
+    if (err) return mal(err);
+    const nombres = Object.fromEntries(Object.values(alexa.serialNumbers || {}).map((d) => [d.serialNumber, d.accountName]));
+    const lista = ((r && r.notifications) || [])
+      .filter((n) => /alarm/i.test(n.type) && n.status === 'ON')
+      .map((n) => ({
+        id: n.notificationIndex || n.id,
+        dispositivo: nombres[n.deviceSerialNumber] || n.deviceSerialNumber,
+        fecha: n.originalDate || '',
+        hora: String(n.originalTime || '').slice(0, 5),
+        repetir: n.recurringPattern || (n.rRuleData && n.rRuleData.recurrenceRules ? n.rRuleData.recurrenceRules.join(' ') : ''),
+        musica: n.musicEntity || (n.musicAlarmId ? 'música' : ''),
+        tipo: n.type,
+        cuando: n.alarmTime || 0,
+      }))
+      .sort((a, b) => a.cuando - b.cuando);
+    ok(lista);
+  }));
+}
+
+/** Pone una alarma en el Echo por la API de notificaciones (por orden de texto Alexa no las crea).
+ *  fecha "AAAA-MM-DD" y hora "HH:MM" (24 h); con musica, alarma de Spotify como las que se ponen por voz. */
+async function ponerAlarma(fecha, hora, musica, nombre) {
+  const d = elegir(nombre);
+  if (!d) throw new Error('No encontré ningún Echo en la cuenta.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '') || !/^\d{1,2}:\d{2}$/.test(hora || '')) throw new Error('Fecha u hora inválida.');
+  const [h, m] = hora.split(':').map(Number);
+  const cuando = new Date(`${fecha}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
+  const n = alexa.createNotificationObject(d.serie, 'Alarm', null, cuando, 'ON');
+  let r;
+  if (musica) {
+    // Formato clásico (PUT /api/notifications): el nuevo (/v1/alerts/alarms) ignora la música
+    const fecha2 = n.originalDate, hora2 = n.originalTime;
+    const clasica = {
+      type: 'MusicAlarm', status: 'ON', alarmTime: cuando.getTime(), createdDate: Date.now(),
+      deviceSerialNumber: d.serie, deviceType: alexa.serialNumbers[d.serie].deviceType,
+      originalDate: fecha2 || fecha, originalTime: hora2 || `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000`,
+      musicEntity: musica, provider: 'Spotify', musicAlarmId: null, id: null, isRecurring: false, recurringPattern: null,
+      reminderLabel: null, sound: null, isSaveInFlight: true, timeZoneId: null, reminderIndex: null,
+    };
+    r = await new Promise((ok, mal) => alexa.httpsGet('/api/notifications/null', (err, res) => (err ? mal(err) : ok(res)),
+      { method: 'PUT', data: JSON.stringify(clasica) }));
+  } else {
+    r = await new Promise((ok, mal) => alexa.createNotification(n, (err, res) => (err ? mal(err) : ok(res))));
+  }
+  return { dispositivo: d.nombre, fecha, hora, musica: musica || '', id: r && (r.notificationIndex || r.id) };
+}
+
+/** Borra una alarma por su id (de /alarmas). */
+async function borrarAlarma(id) {
+  const n = await new Promise((ok, mal) => alexa.getNotifications(false, (err, r) => (err ? mal(err)
+    : ok(((r && r.notifications) || []).find((x) => (x.notificationIndex || x.id) === id)))));
+  if (!n) throw new Error('No encontré esa alarma.');
+  await new Promise((ok, mal) => alexa.deleteNotification(n, (err) => (err ? mal(err) : ok())));
+  return { borrada: id };
+}
+
 function responder(res, codigo, cuerpo) {
   res.writeHead(codigo, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(cuerpo));
@@ -147,6 +254,11 @@ http.createServer((req, res) => {
       if (req.url === '/dispositivos') return responder(res, 200, dispositivos());
       if (req.url === '/comando') return responder(res, 200, { dispositivo: await secuencia(datos.dispositivo, 'textCommand', datos.texto) });
       if (req.url === '/reproduciendo') return responder(res, 200, (await reproduciendo(datos.dispositivo)) || { estado: 'nada' });
+      if (req.url === '/alarmas') return responder(res, 200, await alarmas());
+      if (req.url === '/alarma') return responder(res, 200, await ponerAlarma(datos.fecha, datos.hora, datos.musica, datos.dispositivo));
+      if (req.url === '/alarma-borrar') return responder(res, 200, await borrarAlarma(datos.id));
+      if (req.url === '/volumen') return responder(res, 200, await cambiarVolumen(datos.cambio, datos.dispositivo));
+      if (req.url === '/saltar') return responder(res, 200, await saltar(datos.posicion, datos.dispositivo));
       if (req.url === '/control') return responder(res, 200, { dispositivo: await controlar(datos.accion, datos.dispositivo, datos.valor) });
       if (req.url === '/decir') return responder(res, 200, { dispositivo: await secuencia(datos.dispositivo, 'speak', datos.texto) });
       responder(res, 404, { error: 'ruta desconocida' });

@@ -3,7 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.limber.casa</string>
-  <key>ProgramArguments</key><array><string>/opt/homebrew/bin/uv</string><string>run</string><string>casa.py</string></array>
+  <!-- Python del venv directo (no "uv run"): así al reiniciar se cierra el proceso que tiene el puerto 8800 -->
+  <key>ProgramArguments</key><array><string>$HOME/Anbernic/casa/.venv/bin/python</string><string>casa.py</string></array>
   <key>WorkingDirectory</key><string>$HOME/Anbernic/casa</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

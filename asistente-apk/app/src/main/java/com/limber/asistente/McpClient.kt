@@ -84,6 +84,19 @@ class McpClient(val alias: String, private val url: String, private val token: S
         } finally { conn.disconnect() }
     }
 
+    /** Portada de una canción, descargada por el hub (el DNS del router no resuelve i.scdn.co). */
+    fun albumArt(artUrl: String): ByteArray? {
+        val conn = (URL(url.substringBeforeLast("/mcp") + "/portada").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; connectTimeout = 2_000; readTimeout = 8_000; doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
+        }
+        return try {
+            conn.outputStream.use { it.write(JSONObject().put("url", artUrl).toString().toByteArray()) }
+            if (conn.responseCode != 200) null else conn.inputStream.use { it.readBytes() }
+        } finally { conn.disconnect() }
+    }
+
     /** Las herramientas remotas como [Tool], con prefijo del alias para no chocar con las locales. */
     fun asTools(): List<Tool> = tools.map { t ->
         val remote = t.getString("name")

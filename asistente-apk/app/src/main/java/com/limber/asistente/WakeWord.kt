@@ -131,7 +131,9 @@ class WakeWord(private val context: Context, private val onWake: () -> Unit) {
                 if (heyClear && conf >= 0.35 && name.joinToString(" ") != "mon") return true
                 continue
             }
-            if ((withHey && conf >= 0.3) || conf >= alone) return true
+            // "mon" es una sílaba muy común (momento, monitor, la tele): con "hey" pide más seguridad
+            val withHeyMin = if (name.joinToString(" ") == "mon") 0.5 else 0.3
+            if ((withHey && conf >= withHeyMin) || conf >= alone) return true
         }
         val tail = words.lastOrNull() ?: return false   // frase vacía (la pausa): conserva el "hey"
         heyAt = if (tail.optString("word") == "hey" && tail.optDouble("conf") >= 0.3) System.currentTimeMillis() else 0L
@@ -158,8 +160,9 @@ class WakeWord(private val context: Context, private val onWake: () -> Unit) {
         private const val STRICT_TAIL_MS = 1_500L
         /** Cómo entiende el modelo en español la palabra dicha a la latina ("Monki" ≈ "mon qui"). */
         private val ALIASES = mapOf("monkey" to listOf("mon qui", "mon ki", "moni", "qui", "mon"))
-        /** Seguridad mínima sin "hey" delante. "qui" y "moni" sueltos salen del ruido del juego: solo cuentan tras "hey". */
-        private const val ALONE_DEFAULT = 0.7
-        private val ALONE_MIN = mapOf("mon qui" to 0.5, "mon ki" to 0.5, "qui" to 2.0, "moni" to 2.0)
+        /** Seguridad mínima sin "hey" delante: solo si el nombre se entendió muy claro. Con el micrófono de la consola
+         *  (más sensible que los audífonos) "mon" suelto, "qui" y "moni" salían del ruido y lo activaban solo. */
+        private const val ALONE_DEFAULT = 0.8
+        private val ALONE_MIN = mapOf("mon" to 2.0, "qui" to 2.0, "moni" to 2.0)
     }
 }

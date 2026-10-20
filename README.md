@@ -19,12 +19,13 @@ Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monk
 |---|---|
 | **Conversar** | Cualquier pregunta, en 1 o 2 frases directas. Personalidad de mayordomo con humor seco |
 | **Internet** | Búsquedas (DuckDuckGo), leer páginas, clima (wttr.in). Sin gastar cuota de IA |
-| **Tiempo y memoria** | Temporizadores, alarmas, recordatorios; recuerda tus datos entre conversaciones |
+| **Alarmas en el Echo** | "Pon una alarma mañana a las 7 con Bad Bunny": queda en tu Echo y suena con esa música de Spotify. También las lista y las quita |
+| **Tiempo y memoria** | Temporizadores y recordatorios en la consola; recuerda tus datos entre conversaciones |
 | **Rutinas** | Frases que hacen varias cosas ("buenas noches"). Se crean y se borran hablando |
 | **La consola** | Ve la pantalla, toca, desliza, abre apps y juegos, escribe, volumen, brillo, batería |
 | **Mac y Windows** (vía `casa`) | Estado (CPU, RAM, disco, batería), captura, abrir y cerrar apps, teclado y mouse, portapapeles, buscar y abrir archivos, brillo, silencio, bloquear, dormir, reiniciar o apagar (con confirmación), música, avisos |
 | **Teles y celulares** (vía `casa`) | Chromecast y YouTube, celulares Android por adb, Wake-on-LAN |
-| **Música en los Echo** (vía `casa`) | "Pon música relajante en Spotify", pausa, siguiente, volumen. No hace falta decir "Alexa" |
+| **Música en los Echo** (vía `casa`) | "Pon música relajante en Spotify", pausa, siguiente, volumen, adelantar. No hace falta decir "Alexa" |
 
 ### La cara
 
@@ -40,8 +41,21 @@ Todo con servicios **gratuitos**. Cuando una API gratis se queda sin cuota, Monk
 
 ### La pantalla
 
-- **Widgets** a los lados de la cara: hora y fecha, clima, próxima alarma y cada computadora conectada (batería, CPU, RAM).
-- **Reproductor:** si suena algo en un Echo, aparece una barra con portada, canción, artista y botones ⏮ ⏯ ⏭.
+<p align="center">
+  <img src="docs/imagenes/monki-pantalla.png" width="640" alt="Pantalla de Monki: cara, widgets de hora, clima, alarma y computadora, y el reproductor con portada y barra de avance">
+</p>
+
+- **Widgets** a los lados de la cara: hora y fecha, clima, próxima alarma (del Echo, con su música) y cada computadora conectada con su modelo, batería, disco, CPU y RAM. **Toman el color del ánimo.**
+- **Toca un widget** (o selecciónalo con la cruceta y presiona A) y su detalle aparece en el lugar de la cara: estado de la consola, clima y pronóstico, todas las alarmas o la información completa de la computadora.
+- **Reproductor:** si suena algo en un Echo aparece con la portada, el fondo del color de la portada, la canción, una **barra de avance que puedes arrastrar** (o mover con la cruceta) para adelantar o regresar, y botones redondos ⏮ ⏯ ⏭.
+- **Botones de volumen de la consola:** con el panel abierto y música sonando, suben y bajan el volumen del Echo.
+- **Toca el reproductor** y aparece la lista de canciones de lo que suena, con la actual marcada; toca otra y se la pide al Echo.
+- Botones en forma de píldora; al escribir con el teclado aparece **"← Volver"**.
+
+<p align="center">
+  <img src="docs/imagenes/monki-lista.png" width="420" alt="Lista de canciones de la lista que suena, con la canción actual marcada">
+  <img src="docs/imagenes/monki-detalle.png" width="420" alt="Detalle de la computadora al tocar su widget: CPU, RAM, disco, batería y tiempo encendida">
+</p>
 
 <p align="center">
   <img src="docs/imagenes/monki-reproductor.png" width="620" alt="Barra del reproductor con la portada, la canción y los botones anterior, pausa y siguiente">
@@ -62,6 +76,19 @@ pedido ─► Groq ──► NVIDIA ──► OpenRouter ──► Gemini ──
 - **Modelo local:** Qwen2.5-0.5B con [llama.cpp](https://github.com/ggml-org/llama.cpp) compilado dentro de la app. Conversa sin internet (~8 s por respuesta), pero no usa herramientas.
 
 Para entender tu voz usa **Whisper** de Groq (~1 s), con Gemini de respaldo.
+
+### ¿Y si la computadora está apagada?
+
+Monki vive en la consola y **no depende de la Mac** para lo esencial:
+
+| Funciona sin la Mac | Necesita `casa` encendido |
+|---|---|
+| "Hey monki", respuestas (Groq, NVIDIA, Gemini o el modelo local), internet, clima | Voz de Edge (se usa Gemini o la voz sin internet) |
+| Voz con Gemini o Piper sin internet | Música, alarmas y volumen de los Echo |
+| Temporizadores, recordatorios, rutinas, memoria | Portadas y lista de canciones |
+| Cara, ánimo, widgets de hora y clima, control de la consola | Control de la computadora |
+
+Si `casa` no responde, Monki deja de intentar su voz durante 2 minutos para no hacerte esperar.
 
 ## Voz
 
@@ -152,7 +179,7 @@ cd casa
 uv run casa.py      # la primera vez crea .env con CASA_TOKEN
 ```
 
-- **macOS:** arranque automático con la plantilla `configuracion/launchd/com.limber.casa.plist`. Para que Monki use el teclado y el mouse, da permiso de *Accesibilidad* a `uv`/`python`.
+- **macOS:** arranque automático con la plantilla `configuracion/launchd/com.limber.casa.plist` (lanza el Python del `.venv` directamente; con `uv run` en medio, al reiniciar quedaba un proceso viejo con el puerto ocupado). Para que Monki use el teclado y el mouse, da permiso de *Accesibilidad* a `uv`/`python`.
 - **Windows:** `powershell -ExecutionPolicy Bypass -File .\instalar-windows.ps1` como administrador; al final imprime la línea para la consola.
 
 Conecta Monki al hub:
@@ -173,10 +200,17 @@ Todos los ajustes están en [docs/configuracion.md](docs/configuracion.md).
 
 ---
 
+## Doble sistema: dArkOS en la SD
+
+Si quieres un sistema de juegos tipo ArkOS sin perder Android (ni a Monki): graba [dArkOS](https://github.com/christianhaitian/dArkOS/releases) para RG353V en una SD (con Raspberry Pi Imager; `dd` desde la terminal de macOS no tiene permiso) y ponla en **TF1**. Con la SD puesta arranca dArkOS; sin ella, Android con Monki. La tarjeta de juegos va en TF2: en dArkOS, *Options → Advanced → Switch to SD2 for Roms*, y espera a que termine sin reiniciar.
+
+> ROCKNIX actual no sirve aquí: su Linux *mainline* solo arranca si borras el Android interno.
+
 ## Uso
 
 - **"hey monki"** o el botón **X**: escucha. **B** interrumpe. Mientras habla también lo cortas con "hey monki".
-- Ejemplos: *"¿cómo estará el clima mañana?"*, *"pon un temporizador de 10 minutos"*, *"abre PPSSPP"*, *"pon música relajante en Spotify"*, *"siguiente canción"*, *"¿cómo está mi Mac?"*, *"cierra Chrome en la Mac"*, *"ponte morado"*, *"buenas noches"*.
+- Ejemplos: *"¿cómo estará el clima mañana?"*, *"pon una alarma a las 7 con Metallica"*, *"¿qué alarmas tengo?"*, *"pon un temporizador de 10 minutos"*, *"abre PPSSPP"*, *"pon música relajante en Spotify"*, *"siguiente canción"*, *"¿cómo está mi Mac?"*, *"cierra Chrome en la Mac"*, *"ponte morado"*, *"buenas noches"*.
+- Llámalo con **"hey monki"**: el nombre solo, sin "hey", solo lo despierta si se entiende muy claro (así no se activa con la tele o los juegos).
 - Rutinas por voz: *"crea una rutina 'a jugar' que suba el brillo a 80 y abra PPSSPP"*.
 
 ## Privacidad y secretos

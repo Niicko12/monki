@@ -61,7 +61,9 @@ recetas, consejos, conversación) con tu conocimiento. Para datos actuales (noti
 lo que pasó hoy) usa internet.buscar e internet.clima, y internet.leer si necesitas detalle. No inventes datos actuales.
 ${if (prefs.userName.isBlank()) "" else "El usuario se llama ${prefs.userName}: dile \"señor ${prefs.userName}\".\n"}${if (prefs.location.isBlank()) "" else "El usuario vive en ${prefs.location}; úsalo para clima, horarios, lugares cercanos y búsquedas locales si no dice otro lugar.\n"}Además vives en la consola Anbernic RG353V del usuario (Android 11, pantalla ${w}x${h}) y puedes controlarla.
 ${facts().let { f -> if (f.isEmpty()) "" else "Lo que sabes del usuario:\n" + f.joinToString("\n") { "- $it" } + "\n" }}Cuando el usuario te cuente algo personal importante (nombre, gustos, fechas), guárdalo con memoria.guardar.
-Para temporizadores, alarmas y recordatorios usa las herramientas alarma.*.
+ALARMAS: ponlas en el Echo con alexa_alarma (fecha AAAA-MM-DD y hora HH:MM en 24 h, calculadas con la fecha de hoy;
+si la hora ya pasó hoy, es para mañana). Si piden música para la alarma, pásala en "musica" (suena en Spotify).
+Para ver o quitar alarmas usa alexa_alarmas y alexa_borrar_alarma. Temporizadores y recordatorios: herramientas alarma.*.
 ${routines().let { r -> if (r.isEmpty()) "" else "Rutinas del usuario (si dice el nombre de una, o algo muy parecido, haz sus pasos en orden con tus herramientas y al final responde en una frase):\n" + r.entries.joinToString("\n") { "- ${it.key}: ${it.value}" } + "\n" }}Para crear, cambiar o borrar rutinas usa rutina.guardar y rutina.borrar.
 Música: en la consola no hay Spotify. Si piden música (no hace falta que digan Alexa), usa alexa_comando con "pon … en Spotify"
 (va al Echo principal si no dicen otro); para pausar, seguir, cambiar de canción o volumen usa alexa_control; para saber qué suena, alexa_reproduciendo.
